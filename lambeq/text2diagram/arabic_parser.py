@@ -3,10 +3,6 @@ from __future__ import annotations
 __all__ = ['ArabicParser', 'ArabicParseError']
 
 import stanza
-from camel_tools.utils.normalize import normalize_unicode
-from camel_tools.tokenizers.word import simple_word_tokenize
-from camel_tools.morphology.database import MorphologyDB
-from camel_tools.morphology.analyzer import Analyzer
 from collections.abc import Iterable
 from typing import Any
 from lambeq.text2diagram.ccg_parser import CCGParser
@@ -27,7 +23,7 @@ class ArabicParseError(Exception):
 
 
 class ArabicParser(CCGParser):
-    """CCG parser for Arabic using Stanza and CamelTools."""
+    """CCG parser for Arabic using Stanza and ATB dataset."""
 
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
         """Initialize the ArabicParser with required NLP tools."""
@@ -35,9 +31,6 @@ class ArabicParser(CCGParser):
 
         if not VerbosityLevel.has_value(verbose):
             raise ValueError(f'`{verbose}` is not a valid verbose value for ArabicParser.')
-        
-        # Initialize the morphology analyzer
-        self.analyzer = Analyzer(MorphologyDB.builtin_db())
         
         # Initialize Stanza for dependency parsing
         stanza.download('ar', processors='tokenize,pos,lemma,depparse')
@@ -62,7 +55,7 @@ class ArabicParser(CCGParser):
             if not untokenised_batch_type_check(sentences):
                 raise ValueError('`tokenised` set to `False`, but variable `sentences` does not have type `List[str]`.')
             sent_list: list[str] = [str(s) for s in sentences]
-            sentences = [self.preprocess(sentence) for sentence in sent_list]
+            sentences = [sentence.split() for sentence in sent_list]
         
         trees: list[CCGTree] = []
         for sentence in sentences:
@@ -78,12 +71,6 @@ class ArabicParser(CCGParser):
         
         return trees
     
-    def preprocess(self, sentence: str) -> list[str]:
-        """Normalize and tokenize Arabic text."""
-        normalized_text = normalize_unicode(sentence)
-        tokens = simple_word_tokenize(normalized_text)
-        return tokens
-
     def parse_atb(self, words: list[str]) -> list[dict]:
         """Parse Arabic sentence using ATB syntactic structures."""
         sentence = " ".join(words)
@@ -135,4 +122,3 @@ class ArabicParser(CCGParser):
             return CCGType.NOUN_PHRASE
         
         return atb_to_ccg_map.get(atb_pos, CCGType.NOUN)  # Default to noun if unknown
-
