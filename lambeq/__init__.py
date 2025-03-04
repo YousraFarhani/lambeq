@@ -50,6 +50,8 @@ __all__ = [
         'DepCCGParser',
         'WebParseError',
         'WebParser',
+        'ArabicParser',
+        'ArabicParseError',
 
         'AtomicType',
 
@@ -124,7 +126,7 @@ from lambeq.text2diagram import (
         BobcatParseError, BobcatParser,
         CCGBankParseError, CCGBankParser,
         DepCCGParseError, DepCCGParser,
-        WebParseError, WebParser,
+        WebParseError, WebParser,ArabicParser,ArabicParseError,
         Reader, LinearReader, TreeReader, TreeReaderMode,
         bag_of_words_reader, cups_reader, spiders_reader,
         stairs_reader, word_sequence_reader)
