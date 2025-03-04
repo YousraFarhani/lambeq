@@ -26,6 +26,8 @@ __all__ = ['CCGType',
            'DepCCGParser',
            'WebParseError',
            'WebParser',
+           'ArabicParser',
+           'ArabicParserError',
 
            'LinearReader',
            'Reader',
@@ -55,3 +57,4 @@ from lambeq.text2diagram.linear_reader import (LinearReader,
 from lambeq.text2diagram.spiders_reader import (bag_of_words_reader,
                                                 spiders_reader)
 from lambeq.text2diagram.tree_reader import TreeReader, TreeReaderMode
+from lambeq.text2diagram.arabic_parser import ArabicParser, ArabicParserError
