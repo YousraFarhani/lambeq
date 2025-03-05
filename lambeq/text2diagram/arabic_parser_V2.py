@@ -68,7 +68,7 @@ class ArabicParser2(CCGParser):
                 if suppress_exceptions:
                     trees.append(None)
                 else:
-                    raise ArabicParseError(' '.join(sentence)) from e
+                    raise ArabicParse2Error(' '.join(sentence)) from e
         
         return trees
     
