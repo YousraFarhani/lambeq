@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__all__ = ['ArabicParser', 'ArabicParseError']
+__all__ = ['ArabicParser2', 'ArabicParse2Error']
 
 import stanza
 import re
