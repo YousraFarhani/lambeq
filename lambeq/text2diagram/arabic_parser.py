@@ -3,6 +3,7 @@ from __future__ import annotations
 __all__ = ['ArabicParser', 'ArabicParseError']
 
 import stanza
+import re
 from collections.abc import Iterable
 from typing import Any
 from lambeq.text2diagram.ccg_parser import CCGParser
@@ -55,7 +56,7 @@ class ArabicParser(CCGParser):
             if not untokenised_batch_type_check(sentences):
                 raise ValueError('`tokenised` set to `False`, but variable `sentences` does not have type `List[str]`.')
             sent_list: list[str] = [str(s) for s in sentences]
-            sentences = [sentence.split() for sentence in sent_list]
+            sentences = [self.preprocess(sentence) for sentence in sent_list]
         
         trees: list[CCGTree] = []
         for sentence in sentences:
@@ -71,6 +72,20 @@ class ArabicParser(CCGParser):
         
         return trees
     
+    def preprocess(self, sentence: str) -> list[str]:
+        """Normalize and tokenize Arabic text, handling ATB cases."""
+        words = re.findall(r'\b\w+\b', sentence)  # Tokenize words correctly
+        processed_words = []
+        
+        for word in words:
+            if word.startswith("ال") and len(word) > 2:
+                processed_words.append("ال")
+                processed_words.append(word[2:])
+            else:
+                processed_words.append(word)
+        
+        return processed_words
+
     def parse_atb(self, words: list[str]) -> list[dict]:
         """Parse Arabic sentence using ATB syntactic structures."""
         sentence = " ".join(words)
@@ -90,14 +105,23 @@ class ArabicParser(CCGParser):
     
     def convert_to_ccg(self, atb_tree: list[dict]) -> CCGTree:
         """Convert ATB's parse tree into a CCG derivation."""
-        children = []
+        nodes = []
+        
         for entry in atb_tree:
             word = entry["word"]
             pos = entry["pos"]
             dependency = entry["dep"]
             ccg_category = self.map_pos_to_ccg(pos, dependency)
-            children.append(CCGTree(text=word, rule=CCGRule.LEXICAL, biclosed_type=ccg_category))
-        return CCGTree(text=None, rule=CCGRule.FORWARD_APPLICATION, children=children, biclosed_type=CCGType.SENTENCE)
+            nodes.append(CCGTree(text=word, rule=CCGRule.LEXICAL, biclosed_type=ccg_category))
+
+        # Ensure binary tree formation
+        while len(nodes) > 1:
+            left = nodes.pop(0)
+            right = nodes.pop(0)
+            parent = CCGTree(text=None, rule=CCGRule.FORWARD_APPLICATION, children=[left, right], biclosed_type=CCGType.SENTENCE)
+            nodes.insert(0, parent)
+
+        return nodes[0]  # Return root CCGTree
     
     def map_pos_to_ccg(self, atb_pos: str, dependency: str) -> CCGType:
         """Map Arabic Treebank POS tags & dependencies to CCG-compatible categories."""
