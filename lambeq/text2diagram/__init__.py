@@ -28,6 +28,8 @@ __all__ = ['CCGType',
            'WebParser',
            'ArabicParser',
            'ArabicParseError',
+           'ArabicParser2',
+           'ArabicParse2Error',
 
            'LinearReader',
            'Reader',
