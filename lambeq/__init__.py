@@ -54,6 +54,7 @@ __all__ = [
         'ArabicParseError',
         'ArabicParser2',
         'ArabicParse2Error',
+        'ATBNode',
 
         'AtomicType',
 
