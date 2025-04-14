@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__all__ = ['ArabicParser', 'ArabicParseError']
+__all__ = ['ArabicParser2', 'ArabicParse2Error']
 
 import stanza
 import re
@@ -202,7 +202,7 @@ def binarize_tree(node: ATBNode) -> ATBNode:
         node.children.insert(0, new_node)
     return node
 
-def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
+def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser2) -> CCGTree:
     """
     Recursively convert an ATBNode into a CCG derivation tree.
     
@@ -267,14 +267,14 @@ def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
 # Full ArabicParser Implementation
 ###############################################################################
 
-class ArabicParseError(Exception):
+class ArabicParse2Error(Exception):
     def __init__(self, sentence: str) -> None:
         self.sentence = sentence
 
     def __str__(self) -> str:
-        return f'ArabicParser failed to parse {self.sentence!r}.'
+        return f'ArabicParser2 failed to parse {self.sentence!r}.'
 
-class ArabicParser(CCGParser):
+class ArabicParser2(CCGParser):
     """
     Full implementation of an Arabic CCG parser based on the PATB conversion rules
     described in "An Arabic CCG Approach for Determining Constituent Types from Arabic Treebank".
@@ -290,7 +290,7 @@ class ArabicParser(CCGParser):
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
         self.verbose = verbose
         if not VerbosityLevel.has_value(verbose):
-            raise ValueError(f'`{verbose}` is not a valid verbose value for ArabicParser.')
+            raise ValueError(f'`{verbose}` is not a valid verbose value for ArabicParser2.')
         # For full conversion, we assume the input is a PATB bracketed tree.
         # However, we still initialize Stanza in case we need downstream dependency info.
         stanza.download('ar', processors='tokenize,pos,lemma,depparse', verbose=False)
@@ -314,7 +314,7 @@ class ArabicParser(CCGParser):
             ccg_tree = convert_atb_node_to_ccg(binarized_tree, self)
             return ccg_tree
         except Exception as e:
-            raise ArabicParseError(sentence) from e
+            raise ArabicParse2Error(sentence) from e
 
     def map_pos_to_ccg(self, atb_pos: str, dependency: str) -> CCGType:
         """
@@ -358,5 +358,3 @@ class ArabicParser(CCGParser):
             return CCGType.NOUN_PHRASE
         
         return atb_to_ccg_map.get(atb_pos, CCGType.NOUN)  # Default to noun if unknown.
-
-
