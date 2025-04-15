@@ -28,9 +28,6 @@ __all__ = ['CCGType',
            'WebParser',
            'ArabicParser',
            'ArabicParseError',
-           'ArabicParser2',
-           'ArabicParse2Error',
-           'ATBNode',
 
            'LinearReader',
            'Reader',
@@ -53,7 +50,6 @@ from lambeq.text2diagram.ccgbank_parser import CCGBankParseError, CCGBankParser
 from lambeq.text2diagram.depccg_parser import DepCCGParseError, DepCCGParser
 from lambeq.text2diagram.web_parser import WebParseError, WebParser
 from lambeq.text2diagram.arabic_parser import ArabicParser, ArabicParseError
-from lambeq.text2diagram.arabic_parser_V2 import ArabicParser2, ArabicParse2Error, ATBNode
 
 from lambeq.text2diagram.linear_reader import (LinearReader,
                                                cups_reader,
