@@ -12,8 +12,9 @@ from lambeq.text2diagram.ccg_rule import CCGRule
 from lambeq.text2diagram.ccg_tree import CCGTree
 from lambeq.text2diagram.ccg_type import CCGType
 from lambeq.core.globals import VerbosityLevel
-from lambeq.core.utils import (SentenceBatchType, tokenised_batch_type_check,
-                               untokenised_batch_type_check)
+from lambeq.core.utils import (
+    SentenceBatchType, tokenised_batch_type_check, untokenised_batch_type_check
+)
 
 # Helper classes and functions for PATB tree processing
 
@@ -196,12 +197,12 @@ class ArabicParser(CCGParser):
         stanza.download('ar', processors='tokenize,pos,lemma,depparse', verbose=False)
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse', verbose=False)
 
-    # The signature matches the abstract method (with verbose included)
+    # This method's signature now exactly matches the abstract method.
     def sentences2trees(self,
                         sentences: SentenceBatchType,
                         tokenised: bool = False,
                         suppress_exceptions: bool = False,
-                        verbose: str | None = None) -> list[CCGTree | None]:
+                        verbose: Optional[str] = None) -> list[CCGTree | None]:
         trees: list[CCGTree | None] = []
         for sentence in sentences:
             try:
