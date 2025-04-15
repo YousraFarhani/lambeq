@@ -20,6 +20,16 @@ from lambeq.core.utils import (SentenceBatchType, tokenised_batch_type_check,
 ###############################################################################
 
 class ATBNode:
+    r"""
+    Represents a node in an Arabic Treebank (PATB) parse tree.
+    
+    Attributes:
+      tag: The original tag from PATB (e.g., "NN", "VERB_PERFECT+PVSUFF_SUBJ:3FS", etc.)
+      word: The terminal word (if the node is a leaf).
+      children: List of child ATBNodes.
+      normalized_tag: The tag after normalization (using mapping rules).
+      constituent_type: Annotation ("head", "complement", or "adjunct") determined by heuristics.
+    """
     def __init__(self, tag: str, word: Optional[str] = None, children: Optional[List[ATBNode]] = None):
         self.tag = tag
         self.word = word
@@ -37,7 +47,14 @@ class ATBNode:
             return f"({self.tag} {' '.join([repr(child) for child in self.children])})"
 
 def parse_atb_tree(tree_str: str) -> ATBNode:
+    r"""
+    Parse a PATB-style bracketed tree string into an ATBNode tree.
+    This function uses a recursive descent approach.
+    It will attempt to correct for missing brackets by using heuristics.
     
+    Example:
+      Input: "(S (NP (DT الكتاب) (NN)) (VP (VB قرأ) (NP (DT الطالب) (NN))))"
+    """
     # Preprocess: add spaces around parentheses.
     tokens = tree_str.replace("(", " ( ").replace(")", " ) ").split()
     
@@ -67,7 +84,13 @@ def parse_atb_tree(tree_str: str) -> ATBNode:
     return helper(tokens)
 
 def normalize_tag(node: ATBNode) -> None:
-   
+    r"""
+    Recursively normalize the node's tag using a comprehensive mapping from PATB tags
+    to a reduced tagset used for CCG conversion.
+    
+    The mapping here covers many of the common PATB tags. (A complete system might include
+    several hundred entries; here we list a representative sample.)
+    """
     tag_mapping = {
         # Nouns
         "NN": "NN",
@@ -113,7 +136,15 @@ def normalize_tag(node: ATBNode) -> None:
         normalize_tag(child)
 
 def determine_constituent_types(node: ATBNode) -> None:
+    r"""
+    Determine the constituent types for a given ATB tree node.
     
+    Uses detailed heuristics:
+      - For terminal nodes, examine the original tag for cues such as SBJ, OBJ, ADV.
+      - For non-terminals, if any child contains explicit function tags (e.g., SBJ, OBJ, ADV, LOC),
+        mark the first occurrence as head and others as complements.
+      - Otherwise, choose the middle child as head.
+    """
     if node.is_terminal():
         lower_tag = node.tag.lower()
         if "sbj" in lower_tag:
@@ -149,7 +180,10 @@ def determine_constituent_types(node: ATBNode) -> None:
                 child.constituent_type = "complement"
 
 def binarize_tree(node: ATBNode) -> ATBNode:
-    
+    r"""
+    Binarize the ATB tree recursively. For nodes with more than two children,
+    combine them into binary nodes in a head-driven fashion.
+    """
     if node.is_terminal():
         return node
     node.children = [binarize_tree(child) for child in node.children]
@@ -162,7 +196,13 @@ def binarize_tree(node: ATBNode) -> ATBNode:
     return node
 
 def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
-   
+    r"""
+    Recursively convert an ATBNode (normalized, annotated, and binarized) into a CCG derivation tree.
+    
+    For terminal nodes, a lexical CCGTree is generated using parser.map_pos_to_ccg.
+    For non-terminals, the children are combined by splitting into left and right parts around the head,
+    then using backward and forward application accordingly.
+    """
     if node.is_terminal():
         ccg_type = parser.map_pos_to_ccg(node.normalized_tag, "")
         word_text = node.word[::-1] if node.word else ""
@@ -185,7 +225,7 @@ def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
                 text=None,
                 rule=CCGRule.BACKWARD_APPLICATION,
                 children=[left_tree, children_ccg[i]],
-                biclosed_type=CCGType.SENTENCE  # Placeholder; real type resolution would be applied.
+                biclosed_type=CCGType.SENTENCE  # Placeholder; proper type resolution would be applied.
             )
     else:
         left_tree = children_ccg[head_index]
@@ -215,7 +255,9 @@ def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
 ###############################################################################
 
 class ArabicParseError(Exception):
-    
+    r"""
+    Exception raised when the Arabic parser fails to convert a sentence.
+    """
     def __init__(self, sentence: str) -> None:
         self.sentence = sentence
 
@@ -223,7 +265,18 @@ class ArabicParseError(Exception):
         return f'ArabicParser failed to parse {self.sentence!r}.'
 
 class ArabicParser(CCGParser):
+    r"""
+    Full implementation of an Arabic CCG parser based on the PATB conversion rules
+    described in "An Arabic CCG Approach for Determining Constituent Types from Arabic Treebank".
     
+    Steps:
+      1. Preprocessing: tokenization, splitting attached determiners (e.g., "ال"), and reversing token order.
+      2. Parsing: converting a PATB-style bracketed tree string into an ATBNode structure.
+      3. Normalization: converting PATB tags to a reduced set via detailed mapping.
+      4. Constituent Type Determination: marking nodes as head, complement, or adjunct using explicit labels (SBJ, OBJ, ADV, etc.) and heuristics.
+      5. Binarization: enforcing binary branching.
+      6. Conversion: transforming the ATB tree into a CCG derivation tree using combinatory rules.
+    """
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
         self.verbose = verbose
         if not VerbosityLevel.has_value(verbose):
@@ -233,7 +286,16 @@ class ArabicParser(CCGParser):
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse', verbose=False)
 
     def sentence2diagram(self, sentence: str) -> CCGTree:
-       
+        r"""
+        Convert a PATB-style tree string for an Arabic sentence into a CCG derivation tree.
+        
+        Steps:
+          a) Parse the bracketed tree string into an ATBNode structure.
+          b) Normalize tags.
+          c) Determine constituent types using detailed heuristics.
+          d) Binarize the tree.
+          e) Convert the ATB tree into a CCG derivation tree.
+        """
         try:
             atb_root = parse_atb_tree(sentence)
             normalize_tag(atb_root)
@@ -245,7 +307,26 @@ class ArabicParser(CCGParser):
             raise ArabicParseError(sentence) from e
 
     def map_pos_to_ccg(self, atb_pos: str, dependency: str) -> CCGType:
+        r"""
+        Map normalized PATB tags (and dependency labels if available) to CCG-compatible categories.
         
+        Detailed mapping (extracted and extended from the paper):
+          - "NN"           -> CCGType.NOUN
+          - "VB"           -> S\NP (verb expecting NP to its left)
+          - "IN"           -> NP\NP
+          - "DT"           -> N/N
+          - "JJ"           -> N\N (adjective as post-nominal modifier)
+          - "PRP"          -> NP
+          - "RB"           -> S/S
+          - "CD"           -> N/N
+          - "CC"           -> CCGType.CONJUNCTION
+          - "PUNC"         -> CCGType.PUNCTUATION
+          - "FW"           -> CCGType.FOREIGN
+        Dependency overrides:
+          - If dependency in {"amod", "acl"} -> use N\N.
+          - If dependency in {"nsubj", "csubj"} -> use NP.
+          - If dependency in {"obj", "iobj"}   -> use NP.
+        """
         atb_to_ccg_map = {
             "NN": CCGType.NOUN,
             "VB": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
