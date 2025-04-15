@@ -15,12 +15,9 @@ from lambeq.core.globals import VerbosityLevel
 from lambeq.core.utils import (SentenceBatchType, tokenised_batch_type_check,
                                untokenised_batch_type_check)
 
-#############################
-# Helper classes and functions for PATB Tree Processing
-#############################
+# Helper classes and functions for PATB tree processing
 
 class ATBNode:
-    # Represents a node in a PATB parse tree.
     def __init__(self, tag: str, word: Optional[str] = None, children: Optional[List[ATBNode]] = None):
         self.tag = tag
         self.word = word
@@ -38,9 +35,7 @@ class ATBNode:
             return f"({self.tag} {' '.join([repr(child) for child in self.children])})"
 
 def parse_atb_tree(tree_str: str) -> ATBNode:
-    # Parse a PATB-style bracketed tree string into an ATBNode tree.
     tokens = tree_str.replace("(", " ( ").replace(")", " ) ").split()
-    
     def helper(tokens: List[str]) -> ATBNode:
         if not tokens:
             raise ValueError("Unexpected end of tokens.")
@@ -59,11 +54,9 @@ def parse_atb_tree(tree_str: str) -> ATBNode:
         if tokens and tokens[0] == ')':
             tokens.pop(0)
         return ATBNode(tag, word, children)
-    
     return helper(tokens)
 
 def normalize_tag(node: ATBNode) -> None:
-    # Recursively normalize the node's tag using a mapping dictionary.
     tag_mapping = {
         "NN": "NN",
         "NOUN": "NN",
@@ -99,7 +92,6 @@ def normalize_tag(node: ATBNode) -> None:
         normalize_tag(child)
 
 def determine_constituent_types(node: ATBNode) -> None:
-    # Determine constituent types (head, complement, adjunct) using heuristics.
     if node.is_terminal():
         lower_tag = node.tag.lower()
         if "sbj" in lower_tag:
@@ -133,7 +125,6 @@ def determine_constituent_types(node: ATBNode) -> None:
                 child.constituent_type = "complement"
 
 def binarize_tree(node: ATBNode) -> ATBNode:
-    # Binarize the ATB tree recursively, enforcing binary branching.
     if node.is_terminal():
         return node
     node.children = [binarize_tree(child) for child in node.children]
@@ -146,7 +137,6 @@ def binarize_tree(node: ATBNode) -> ATBNode:
     return node
 
 def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
-    # Recursively convert an ATBNode to a CCGTree.
     if node.is_terminal():
         ccg_type = parser.map_pos_to_ccg(node.normalized_tag, "")
         word_text = node.word[::-1] if node.word else ""
@@ -194,7 +184,6 @@ def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
 #############################
 
 class ArabicParseError(Exception):
-    # Exception raised when the Arabic parser fails to parse a sentence.
     def __init__(self, sentence: str) -> None:
         self.sentence = sentence
 
@@ -210,6 +199,24 @@ class ArabicParser(CCGParser):
         stanza.download('ar', processors='tokenize,pos,lemma,depparse', verbose=False)
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse', verbose=False)
 
+    # Implementing the abstract method from CCGParser:
+    def sentences2trees(self,
+                        sentences: SentenceBatchType,
+                        tokenised: bool = False,
+                        suppress_exceptions: bool = False,
+                        verbose: Optional[str] = None) -> list[CCGTree | None]:
+        trees: list[CCGTree | None] = []
+        for sentence in sentences:
+            try:
+                tree = self.sentence2diagram(sentence)
+                trees.append(tree)
+            except Exception as e:
+                if suppress_exceptions:
+                    trees.append(None)
+                else:
+                    raise e
+        return trees
+
     def sentence2diagram(self, sentence: str) -> CCGTree:
         try:
             atb_root = parse_atb_tree(sentence)
@@ -222,7 +229,6 @@ class ArabicParser(CCGParser):
             raise ArabicParseError(sentence) from e
 
     def map_pos_to_ccg(self, atb_pos: str, dependency: str) -> CCGType:
-        # Map normalized PATB tags (and dependency labels) to CCG categories.
         atb_to_ccg_map = {
             "NN": CCGType.NOUN,
             "VB": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
