@@ -179,9 +179,7 @@ def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
         combined = left_tree
     return combined
 
-#############################
 # Full ArabicParser Implementation
-#############################
 
 class ArabicParseError(Exception):
     def __init__(self, sentence: str) -> None:
@@ -191,7 +189,6 @@ class ArabicParseError(Exception):
         return f'ArabicParser failed to parse {self.sentence!r}.'
 
 class ArabicParser(CCGParser):
-    # Full implementation of an Arabic CCG parser based on PATB conversion rules.
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
         self.verbose = verbose
         if not VerbosityLevel.has_value(verbose):
@@ -199,12 +196,12 @@ class ArabicParser(CCGParser):
         stanza.download('ar', processors='tokenize,pos,lemma,depparse', verbose=False)
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse', verbose=False)
 
-    # Implementing the abstract method from CCGParser:
+    # The signature matches the abstract method (with verbose included)
     def sentences2trees(self,
                         sentences: SentenceBatchType,
                         tokenised: bool = False,
                         suppress_exceptions: bool = False,
-                        verbose: Optional[str] = None) -> list[CCGTree | None]:
+                        verbose: str | None = None) -> list[CCGTree | None]:
         trees: list[CCGTree | None] = []
         for sentence in sentences:
             try:
