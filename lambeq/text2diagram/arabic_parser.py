@@ -37,6 +37,9 @@ class ArabicParser(CCGParser):
       - Mapping of normalized ATB tags and dependency relations to preliminary CCG types.
       - A rudimentary constituent-type determination (head versus complement).
       - A simple binary tree formation (to be extended with full binarization methods).
+      
+    Additionally, a `sentence2diagram` method is provided so that the user can
+    directly convert a sentence to a diagram and draw it.
     """
 
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
@@ -86,12 +89,25 @@ class ArabicParser(CCGParser):
                     raise ArabicParseError(" ".join(sentence)) from e
         return trees
 
+    def sentence2diagram(self, sentence: str, tokenised: bool = False,
+                         suppress_exceptions: bool = False, verbose: str | None = None) -> CCGTree:
+        """
+        Convert a single sentence to a CCG diagram (tree).
+        This helper method wraps sentences2trees so that a single sentence is processed
+        and its corresponding diagram (CCGTree) is returned.
+        """
+        trees = self.sentences2trees([sentence], tokenised=tokenised,
+                                      suppress_exceptions=suppress_exceptions, verbose=verbose)
+        if not trees or trees[0] is None:
+            raise ArabicParseError(sentence)
+        return trees[0]
+
     def preprocess(self, sentence: str) -> list[str]:
         """
         Normalize and tokenize Arabic text:
          - Remove extraneous vowels/diacritics.
          - Apply basic tokenization.
-         - Segment attached determiners (e.g. splitting "الكتاب" into "ال" and "كتاب").
+         - Segment attached determiners (e.g., splitting "الكتاب" into "ال" and "كتاب").
          - Optionally reverse token order for display conventions.
         """
         sentence = self.remove_vowels(sentence)
@@ -160,7 +176,7 @@ class ArabicParser(CCGParser):
                 return "VBP"
             return "VB"
 
-        # NO_FUNC handling: if token is "و" map to conjunction; otherwise, try punctuation or proper noun.
+        # NO_FUNC handling: if the token is "و", map to conjunction; else try punctuation or proper noun.
         if atb_pos == "NO_FUNC":
             if word == "و":
                 return "CC"
@@ -298,3 +314,16 @@ class ArabicParser(CCGParser):
                     assign_types(child)
         assign_types(tree)
         return tree
+
+
+# Example usage:
+if __name__ == '__main__':
+    # Sample Arabic sentence: "عذاب اليم" (for example)
+    sentences = [
+        "عذاب اليم"
+    ]
+    parser = ArabicParser()
+    
+    # Convert a single sentence to a diagram using the new sentence2diagram helper
+    diagram = parser.sentence2diagram("عذاب اليم")
+    diagram.draw()
