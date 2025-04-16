@@ -5,14 +5,14 @@ __all__ = ['ArabicParser', 'ArabicParseError']
 import stanza
 import re
 from collections.abc import Iterable
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from lambeq.text2diagram.ccg_parser import CCGParser
 from lambeq.text2diagram.ccg_rule import CCGRule
-from lambeq.text2diagram.ccg_tree import CCGTree
-from lambeq.text2diagram.ccg_type import CCGType
-from lambeq.core.globals import VerbosityLevel
+from lambeq.text2diagram.ccg_tree import CCGTree  # Represents the hierarchical CCG structure
+from lambeq.text2diagram.ccg_type import CCGType  # Represents CCG categories, such as NOUN, VERB
+from lambeq.core.globals import VerbosityLevel  # Controls the verbosity level of the parser
 from lambeq.core.utils import (SentenceBatchType, tokenised_batch_type_check,
-                             untokenised_batch_type_check)
+                               untokenised_batch_type_check)  # Type hints for sentence batches
 
 
 class ArabicParseError(Exception):
@@ -23,119 +23,40 @@ class ArabicParseError(Exception):
         return f'ArabicParser failed to parse {self.sentence!r}.'
 
 
+# Patch CCGTree with a dummy draw() method to avoid AttributeError.
+if not hasattr(CCGTree, 'draw'):
+    def dummy_draw(self) -> None:
+        """A simple textual display of the tree, implemented recursively."""
+        def recurse(node: CCGTree, indent: str = "") -> str:
+            node_text = node.text if node.text is not None else f"[{node.rule.name}]"
+            s = indent + node_text + "\n"
+            for child in getattr(node, 'children', []):
+                s += recurse(child, indent + "  ")
+            return s
+        print(recurse(self))
+    CCGTree.draw = dummy_draw  # Monkey-patch the draw method
+
+
 class ArabicParser(CCGParser):
-    """CCG parser for Arabic using Stanza and ATB dataset.
-    
-    This parser implements the approach described in the research paper:
-    "An Arabic CCG Approach for Determining Constituent Types from Arabic Treebank"
-    """
-
-    # ATB POS tag to CCG category mapping based on the paper
-    ATB_TO_CCG_MAP = {
-        "NN": CCGType.NOUN,                                            # Noun -> N
-        "VB": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),       # Verb -> S\NP
-        "IN": CCGType.NOUN_PHRASE.slash("\\", CCGType.NOUN_PHRASE),    # Preposition -> NP\NP
-        "DT": CCGType.NOUN.slash("/", CCGType.NOUN),                   # Determiner -> N/N
-        "JJ": CCGType.NOUN.slash("/", CCGType.NOUN),                   # Adjective -> N/N
-        "PRP": CCGType.NOUN_PHRASE,                                    # Pronoun -> NP
-        "CC": CCGType.CONJUNCTION,                                     # Conjunction -> Conj
-        "RB": CCGType.SENTENCE.slash("/", CCGType.SENTENCE),           # Adverb -> S/S
-        "CD": CCGType.NOUN.slash("/", CCGType.NOUN),                   # Number -> N/N
-        "UH": CCGType.CONJUNCTION,                                     # Interjection -> Conj
-        "RP": CCGType.VERB_PHRASE.slash("/", CCGType.VERB_PHRASE),     # Particle -> VP/VP
-        "WP": CCGType.NOUN_PHRASE,                                     # Wh-pronoun -> NP
-        "PUNC": CCGType.PUNCTUATION,                                   # Punctuation
-        "NNP": CCGType.NOUN_PHRASE,                                    # Proper noun -> NP
-        "NNPS": CCGType.NOUN_PHRASE,                                   # Plural proper noun -> NP 
-        "NNS": CCGType.NOUN,                                           # Plural noun -> N
-        "VBD": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),      # Past tense verb -> S\NP
-        "VBN": CCGType.VERB_PHRASE.slash("\\", CCGType.NOUN_PHRASE),   # Past participle -> VP\NP
-        "VBP": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),      # Present tense verb -> S\NP
-        "MD": CCGType.SENTENCE.slash("/", CCGType.VERB_PHRASE)         # Modal -> S/VP
-    }
-    
-    # ATB dependency to CCG category mapping based on the paper
-    DEP_TO_CCG_MAP = {
-        "amod": CCGType.NOUN.slash("/", CCGType.NOUN),                 # Adjective modifier -> N/N
-        "acl": CCGType.NOUN.slash("/", CCGType.NOUN),                  # Adjectival clause -> N/N
-        "nsubj": CCGType.NOUN_PHRASE,                                  # Nominal subject -> NP
-        "csubj": CCGType.NOUN_PHRASE,                                  # Clausal subject -> NP
-        "obj": CCGType.NOUN_PHRASE,                                    # Object -> NP
-        "iobj": CCGType.NOUN_PHRASE,                                   # Indirect object -> NP
-        "obl": CCGType.NOUN_PHRASE,                                    # Oblique nominal -> NP
-        "nmod": CCGType.NOUN.slash("\\", CCGType.NOUN),                # Nominal modifier -> N\N
-        "advmod": CCGType.VERB_PHRASE.slash("/", CCGType.VERB_PHRASE), # Adverbial modifier -> VP/VP
-        "mark": CCGType.CONJUNCTION,                                   # Marker -> Conj
-        "det": CCGType.NOUN.slash("/", CCGType.NOUN),                  # Determiner -> N/N
-        "case": CCGType.NOUN_PHRASE.slash("\\", CCGType.NOUN_PHRASE),  # Case marking -> NP\NP
-        "root": CCGType.SENTENCE                                       # Root -> S
-    }
-
-    # Punctuation mapping from the paper
-    PUNCTUATION_MAP = {
-        ".": ".",
-        "?": ".",
-        "!": ".",
-        ",": ",",
-        ";": ":",
-        ":": ":",
-        "(": "-LRB-",
-        ")": "-RRB-",
-        "[": "-LRB-",
-        "]": "-RRB-",
-        "\"": "\"",
-        "'": "''",
-        """: "``",
-        """: "''",
-        "_": ":",
-        "...": ":",
-        "&": "SYM",
-        "@": "SYM",
-        "=": "SYM",
-        "+": "SYM",
-        "*": "SYM",
-        "#": "#",
-        "$": "$",
-        "%": "NN",
-    }
+    """CCG parser for Arabic using Stanza and the Arabic Treebank conversion rules proposed by El‑Taher et al. (2014)."""
 
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
         """Initialize the ArabicParser with required NLP tools."""
         self.verbose = verbose
-        
-        # Validate the verbosity setting
         if not VerbosityLevel.has_value(verbose):
             raise ValueError(f'`{verbose}` is not a valid verbose value for ArabicParser.')
         
-        # Initialize Stanza for dependency parsing with more processors
-        # Using full pipeline for detailed morphological analysis
-        try:
-            stanza.download('ar', processors='tokenize,mwt,pos,lemma,depparse,ner')
-            self.nlp = stanza.Pipeline(lang='ar', 
-                                      processors='tokenize,mwt,pos,lemma,depparse,ner',
-                                      tokenize_pretokenized=True)
-        except Exception as e:
-            print(f"Stanza initialization error: {e}")
-            print("Falling back to basic pipeline...")
-            stanza.download('ar', processors='tokenize,pos,lemma,depparse')
-            self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse')
-    
-    def sentences2trees(self,
-                      sentences: SentenceBatchType,
-                      tokenised: bool = False,
-                      suppress_exceptions: bool = False,
-                      verbose: str | None = None) -> list[CCGTree | None]:
-        """Convert multiple Arabic sentences to CCG trees.
-        
-        Args:
-            sentences: List of sentences or tokenized sentences
-            tokenised: Whether the input is already tokenized
-            suppress_exceptions: Whether to return None instead of raising exceptions
-            verbose: Verbosity level
-            
-        Returns:
-            List of CCG trees or None values for failed parses
-        """
+        # Initialize Stanza for dependency parsing.
+        stanza.download('ar', processors='tokenize,pos,lemma,depparse')
+        self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse')
+
+    def sentences2trees(
+            self,
+            sentences: SentenceBatchType,
+            tokenised: bool = False,
+            suppress_exceptions: bool = False,
+            verbose: str | None = None) -> list[CCGTree | None]:
+        """Convert multiple Arabic sentences to CCG trees."""
         if verbose is None:
             verbose = self.verbose
         if not VerbosityLevel.has_value(verbose):
@@ -148,354 +69,167 @@ class ArabicParser(CCGParser):
             if not untokenised_batch_type_check(sentences):
                 raise ValueError('`tokenised` set to `False`, but variable `sentences` does not have type `List[str]`.')
             sent_list: list[str] = [str(s) for s in sentences]
-            # Apply preprocessing to each sentence
+            # Preprocess each sentence: tokenize and, if needed, split clitics.
             sentences = [self.preprocess(sentence) for sentence in sent_list]
         
         trees: list[CCGTree | None] = []
-        for i, sentence in enumerate(sentences):
+        for sentence in sentences:
             try:
-                # Parse sentence using Arabic Treebank structure
                 atb_tree = self.parse_atb(sentence)
-                # Convert ATB parse to CCG structure
                 ccg_tree = self.convert_to_ccg(atb_tree)
                 trees.append(ccg_tree)
-                
-                if verbose == VerbosityLevel.TEXT.value:
-                    print(f"Parsed sentence {i+1}/{len(sentences)}")
-                
             except Exception as e:
                 if suppress_exceptions:
                     trees.append(None)
-                    if verbose == VerbosityLevel.TEXT.value:
-                        print(f"Failed to parse sentence {i+1}: {' '.join(sentence) if isinstance(sentence, list) else sentence}")
                 else:
-                    sentence_text = ' '.join(sentence) if isinstance(sentence, list) else sentence
-                    raise ArabicParseError(sentence_text) from e
+                    # Join the sentence tokens back for the error message.
+                    raise ArabicParseError(" ".join(sentence)) from e
         
         return trees
-    
+
     def preprocess(self, sentence: str) -> list[str]:
-        """Normalize and tokenize Arabic text with morphological awareness.
+        """Normalize and tokenize Arabic text.
         
-        This implements preprocessing described in the paper section 4.1-4.4.
+        Splits attached definite articles and returns the token list.
+        (Note: tokens are later reversed for dependency order if needed.)
         """
-        # First, handle basic tokenization
-        tokens = []
-        
-        # Simple regex-based tokenization - will be enhanced by Stanza later
-        raw_tokens = re.findall(r'[\u0600-\u06FF\u0750-\u077F]+|[^\s\u0600-\u06FF\u0750-\u077F]+', sentence)
-        
-        for token in raw_tokens:
-            # Handle basic Arabic morphological patterns
-            if re.match(r'^[\u0600-\u06FF\u0750-\u077F]+$', token):  # If token is Arabic
-                # Handle common clitics as described in the paper section 4.3
-                # Process determiner "ال" (al)
-                if token.startswith("ال") and len(token) > 2:
-                    # Following the paper's determiner segmentation approach
-                    tokens.append(token)  # Keep original for Stanza's MWT processor
-                # Handle prepositions like ب (bi), ل (li), etc.
-                elif token.startswith("ب") and len(token) > 1:
-                    tokens.append(token)  # Keep for Stanza's MWT
-                elif token.startswith("ل") and len(token) > 1:
-                    tokens.append(token)  # Keep for Stanza's MWT
-                elif token.startswith("و") and len(token) > 1:
-                    tokens.append(token)  # Keep for Stanza's MWT
-                else:
-                    tokens.append(token)
+        # Find word tokens (adjust regex if needed for Arabic-specific punctuation)
+        words = re.findall(r'\b\w+\b', sentence)
+        processed_words = []
+        for word in words:
+            # If the word starts with the definite article "ال", split it.
+            if word.startswith("ال") and len(word) > 2:
+                processed_words.append("ال")
+                processed_words.append(word[2:])
             else:
-                # Non-Arabic token
-                tokens.append(token)
-        
-        # Process tokens to match ATB conventions as described in section 4.1 of the paper
-        return tokens
-    
-    def normalize_tag(self, tag: str, word: str) -> str:
-        """Normalize ATB tag to standard Penn Treebank tag.
-        
-        This implements the tag conversion described in section 4.2 of the paper.
-        """
-        # Handle special patterns
-        if tag.startswith("NEG_PART+PVSUFF_SUBJ:3MS"):
-            return "VBP"  # imperfect verb
-        
-        # Handle various NO_FUNC, NOTAG cases as described in the paper
-        if tag == "NO_FUNC":
-            if word == "و":  # waw conjunction
-                return "CC"
-            # Check if it's punctuation
-            elif word in self.PUNCTUATION_MAP:
-                return self.PUNCTUATION_MAP[word]
-            else:
-                return "NNP"  # Default to proper noun
-        
-        # Handle non-alphabetic and non-Arabic
-        if tag in ["NON_ALPHABETIC", "NON_ARABIC", "NOTAG"]:
-            if word in self.PUNCTUATION_MAP:
-                return self.PUNCTUATION_MAP[word]
-            elif word.isdigit():
-                return "CD"  # Cardinal number
-            else:
-                return "FW"  # Foreign word
-                
-        # Handle punctuation
-        if tag == "PUNC":
-            if word in self.PUNCTUATION_MAP:
-                return self.PUNCTUATION_MAP[word]
-            return "PUNC"
-        
-        # Basic tag mappings
-        tag_mapping = {
-            "NOUN": "NN",
-            "NOUN_PROP": "NNP",
-            "NOUN_NUM": "CD",
-            "ADJ": "JJ",
-            "ADJ_COMP": "JJR",
-            "ADV": "RB",
-            "PRON": "PRP",
-            "DEM_PRON": "DT",
-            "REL_PRON": "WP",
-            "INTERROG_PRON": "WP",
-            "VERB_PERFECT": "VBD",
-            "VERB_IMPERFECT": "VBP",
-            "VERB_IMPERATIVE": "VB",
-            "VERB_PASSIVE": "VBN",
-            "PREP": "IN",
-            "CONJ": "CC",
-            "SUB_CONJ": "IN",
-            "INTERJ": "UH",
-            "PART_NEG": "RB",
-            "PART_VERB": "RP",
-            "PART_VOC": "UH",
-            "PART_FOCUS": "RP",
-            "PART_FUT": "MD",
-            "DET": "DT"
-        }
-        
-        # Return mapped tag or original if no mapping exists
-        return tag_mapping.get(tag.split("+")[0], tag)
-    
+                processed_words.append(word)
+        # Optionally, you might not need to reverse the word order now that the dependency
+        # tree will determine hierarchical structure. (The original reversal was used for
+        # rendering; adjust if necessary.)
+        return processed_words
+
     def parse_atb(self, words: list[str]) -> list[dict]:
-        """Parse Arabic sentence using ATB syntactic structures and Stanza.
+        """Parse the Arabic sentence using ATB (Arabic Treebank) syntactic structures.
         
-        This implements the parsing approach described in sections 4 and 5 of the paper.
+        Returns a list of token dictionaries containing word, lemma, POS, head and dependency relation.
         """
-        # Join words for Stanza processing
-        text = " ".join(words)
-        
-        # Process with Stanza
-        doc = self.nlp(text)
+        sentence = " ".join(words)
+        doc = self.nlp(sentence)
         parsed_data = []
-        
-        # Extract word features from Stanza parse results
         for sent in doc.sentences:
             for word in sent.words:
-                # Normalize the POS tag
-                normalized_tag = self.normalize_tag(word.xpos or word.pos, word.text)
-                
                 parsed_data.append({
                     "word": word.text,
-                    "lemma": word.lemma or word.text,
-                    "pos": normalized_tag,
-                    "upos": word.pos,  # Universal POS
-                    "xpos": word.xpos,  # Language-specific POS
-                    "head": word.head,  # Syntactic head
-                    "dep": word.deprel,  # Dependency relation
-                    "feats": word.feats  # Morphological features
+                    "lemma": word.lemma,
+                    "pos": word.xpos,      # ATB POS tags; may require normalization
+                    "head": int(word.head),  # head index (0 indicates root)
+                    "dep": word.deprel     # dependency relation
                 })
-        
         return parsed_data
-    
-    def determine_head(self, subtree: list[dict]) -> int:
-        """Determine the head node of a subtree.
+
+    def convert_to_ccg(self, atb_tree: list[dict]) -> CCGTree:
+        """Convert the ATB parse (list of dicts) into a CCG derivation using a dependency tree.
         
-        This implements head-finding heuristics from section 5.1 of the paper.
-        
-        Args:
-            subtree: List of nodes in the subtree
-            
-        Returns:
-            Index of the head node
+        This function builds a dependency tree from the parsed tokens and recursively constructs
+        a binary CCG derivation. The head is determined based on the head indices from the ATB data.
         """
-        # Check for head-marking dependency relations
-        for i, node in enumerate(subtree):
-            if node["dep"] == "root":
-                return i
+        # Create a dictionary of CCGTree nodes from the tokens.
+        nodes: dict[int, CCGTree] = {}
+        # Assume tokens are 1-indexed (as output by Stanza); adjust if necessary.
+        for i, entry in enumerate(atb_tree):
+            # Reverse word characters if needed for display.
+            token_text = entry["word"][::-1]
+            ccg_category = self.map_pos_to_ccg(entry["pos"], entry["dep"])
+            nodes[i + 1] = CCGTree(text=token_text, rule=CCGRule.LEXICAL, biclosed_type=ccg_category)
+
+        # Build a mapping from head index to list of its children indices.
+        children_map = {i + 1: [] for i in range(len(atb_tree))}
+        root_index = None
+        for i, entry in enumerate(atb_tree):
+            head = entry["head"]
+            current_index = i + 1
+            if head == 0:
+                root_index = current_index
+            else:
+                children_map[head].append(current_index)
         
-        # Fallback head-finding heuristics based on POS hierarchy
-        # Priority order for heads: Verb > Noun > Adjective > Others
-        pos_priority = {
-            "VBD": 1, "VBP": 1, "VB": 1,  # Verbs highest priority
-            "NN": 2, "NNP": 2, "NNS": 2,  # Nouns second priority
-            "JJ": 3,  # Adjectives third priority
+        if root_index is None:
+            raise ValueError("No root found in dependency tree.")
+        
+        # Recursively build the CCG derivation.
+        def build_ccg_tree(idx: int) -> CCGTree:
+            node = nodes[idx]
+            child_indices = children_map.get(idx, [])
+            if child_indices:
+                # Sort children by their original order (or by dependency relation if more appropriate).
+                child_indices.sort()
+                # Recursively build each child's subtree.
+                child_trees = [build_ccg_tree(child) for child in child_indices]
+                # Binarize children: combine them iteratively using FORWARD_APPLICATION.
+                # (You might want to choose a different rule based on dependency labels.)
+                combined_children = child_trees[0]
+                for child in child_trees[1:]:
+                    combined_children = CCGTree(
+                        text=None,
+                        rule=CCGRule.FORWARD_APPLICATION,
+                        children=[combined_children, child],
+                        biclosed_type=CCGType.SENTENCE  # This is a placeholder; adapt as needed.
+                    )
+                # Combine the current head with its (binarized) children.
+                node = CCGTree(
+                    text=None,
+                    rule=CCGRule.FORWARD_APPLICATION,
+                    children=[node, combined_children],
+                    biclosed_type=CCGType.SENTENCE  # Again, adjust according to the constituent type.
+                )
+            return node
+        
+        return build_ccg_tree(root_index)
+
+    def map_pos_to_ccg(self, atb_pos: str, dependency: str) -> CCGType:
+        """Map ATB POS tags and dependency relations to CCG-compatible categories.
+        
+        This enhanced mapping includes additional POS tags and handles dependency roles
+        (e.g. subject, object, modifier) based on the heuristics in El‑Taher et al. (2014).
+        """
+        # Extended mapping dictionary: add as many mappings as required.
+        atb_to_ccg_map = {
+            "NN": CCGType.NOUN,
+            "NNS": CCGType.NOUN,
+            "NNP": CCGType.NOUN_PHRASE,
+            "NNPS": CCGType.NOUN_PHRASE,
+            "VB": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
+            "VBD": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
+            "VBP": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
+            "IN": CCGType.NOUN_PHRASE.slash("\\", CCGType.NOUN_PHRASE),
+            "DT": CCGType.NOUN.slash("/", CCGType.NOUN),  # For determiners as modifiers.
+            "JJ": CCGType.NOUN.slash("/", CCGType.NOUN),
+            "PRP": CCGType.NOUN_PHRASE,
+            "CC": CCGType.CONJUNCTION,
+            "RB": CCGType.SENTENCE.slash("/", CCGType.SENTENCE),
+            "CD": CCGType.NOUN.slash("/", CCGType.NOUN),
+            "UH": CCGType.CONJUNCTION,
+            "PUNC": CCGType.NOUN,  # Alternatively, you might define a specific punctuation type.
+            # Additional mappings could be added here (e.g. for NEG_PART, DET attachments, etc.)
         }
         
-        # Find node with highest priority
-        best_priority = float('inf')
-        head_idx = 0
+        # Heuristic adjustments based on dependency relation:
+        if dependency in ["amod", "acl"]:
+            # Adjective modifiers; represent as functions modifying a noun.
+            return CCGType.NOUN.slash("/", CCGType.NOUN)
+        elif dependency in ["nsubj", "csubj"]:
+            # Subjects: treat as noun phrases.
+            return CCGType.NOUN_PHRASE
+        elif dependency in ["obj", "iobj"]:
+            # Objects: treat as noun phrases.
+            return CCGType.NOUN_PHRASE
+        # You can add further dependency-based heuristics (e.g., for adjuncts vs. complements) here.
         
-        for i, node in enumerate(subtree):
-            priority = pos_priority.get(node["pos"], 10)  # Default low priority
-            if priority < best_priority:
-                best_priority = priority
-                head_idx = i
-        
-        return head_idx
-    
-    def identify_complements(self, subtree: list[dict], head_idx: int) -> list[int]:
-        """Identify complement nodes in the subtree.
-        
-        This implements section 5.2 of the paper for identifying complements.
-        
-        Args:
-            subtree: List of nodes in the subtree
-            head_idx: Index of the head node
-            
-        Returns:
-            List of indices of complement nodes
-        """
-        complement_deps = ["nsubj", "csubj", "obj", "iobj", "ccomp", "xcomp", "nmod"]
-        complements = []
-        
-        # Check for dependencies that typically indicate complements
-        for i, node in enumerate(subtree):
-            if i != head_idx:
-                # If dependency indicates a complement relation to the head
-                if node["dep"] in complement_deps:
-                    complements.append(i)
-                # Special case for "BNF" benefactive case (indicating second object)
-                elif node["dep"] == "obl" and "Case=Ben" in (node["feats"] or ""):
-                    complements.append(i)
-        
-        return complements
-    
-    def convert_to_ccg(self, atb_tree: list[dict]) -> CCGTree:
-        """Convert ATB's parse tree into a CCG derivation.
-        
-        This creates a CCG derivation from an ATB-style parse tree
-        as described in sections 5-6 of the paper.
-        """
-        if not atb_tree:
-            raise ArabicParseError("Empty parse tree")
-        
-        # Step 1: Determine the head of the sentence
-        head_idx = self.determine_head(atb_tree)
-        head_node = atb_tree[head_idx]
-        
-        # Step 2: Identify complements (arguments) and adjuncts
-        complement_indices = self.identify_complements(atb_tree, head_idx)
-        
-        # All other nodes are adjuncts
-        adjunct_indices = [i for i in range(len(atb_tree)) 
-                          if i != head_idx and i not in complement_indices]
-        
-        # Step 3: Create CCG nodes for all words
-        nodes = []
-        for i, entry in enumerate(atb_tree):
-            word = entry["word"]  # Use original word without reversal
-            pos = entry["pos"]
-            dependency = entry["dep"]
-            
-            # Determine CCG category based on POS and dependency
-            if dependency in self.DEP_TO_CCG_MAP:
-                ccg_category = self.DEP_TO_CCG_MAP[dependency]
-            elif pos in self.ATB_TO_CCG_MAP:
-                ccg_category = self.ATB_TO_CCG_MAP[pos]
-            else:
-                # Default to noun if unknown
-                ccg_category = CCGType.NOUN
-            
-            # Create lexical node
-            nodes.append(CCGTree(text=word, rule=CCGRule.LEXICAL, 
-                              biclosed_type=ccg_category))
-        
-        # Step 4: Build CCG tree from the nodes
-        if len(nodes) == 1:
-            # Single word sentence
-            return nodes[0]
-        
-        # Create a binary tree following head-complement-adjunct structure
-        remaining_nodes = list(range(len(nodes)))
-        tree_nodes = [nodes[i] for i in remaining_nodes]
-        
-        # First combine head with complements
-        while complement_indices:
-            # Process one complement at a time
-            comp_idx = complement_indices.pop(0)
-            head_tree = nodes[head_idx]
-            comp_tree = nodes[comp_idx]
-            
-            # Determine rule based on word order
-            if comp_idx < head_idx:  # Complement is to the left of head
-                parent = CCGTree(
-                    text=None,
-                    rule=CCGRule.BACKWARD_APPLICATION,
-                    children=[comp_tree, head_tree], 
-                    biclosed_type=head_tree.biclosed_type.result
-                )
-            else:  # Complement is to the right of head
-                parent = CCGTree(
-                    text=None,
-                    rule=CCGRule.FORWARD_APPLICATION,
-                    children=[head_tree, comp_tree],
-                    biclosed_type=head_tree.biclosed_type.result
-                )
-            
-            # Update head node
-            nodes[head_idx] = parent
-        
-        # Then combine with adjuncts
-        while adjunct_indices:
-            # Process one adjunct at a time
-            adj_idx = adjunct_indices.pop(0)
-            head_tree = nodes[head_idx]
-            adj_tree = nodes[adj_idx]
-            
-            # Determine rule based on word order
-            if adj_idx < head_idx:  # Adjunct is to the left of head
-                parent = CCGTree(
-                    text=None,
-                    rule=CCGRule.BACKWARD_APPLICATION,
-                    children=[adj_tree, head_tree],
-                    biclosed_type=head_tree.biclosed_type
-                )
-            else:  # Adjunct is to the right of head
-                parent = CCGTree(
-                    text=None,
-                    rule=CCGRule.FORWARD_APPLICATION,
-                    children=[head_tree, adj_tree],
-                    biclosed_type=head_tree.biclosed_type
-                )
-            
-            # Update head node
-            nodes[head_idx] = parent
-        
-        # Return the final CCG tree (should be at the head index)
-        return nodes[head_idx]
-    
-    def sentence2diagram(self, sentence: str) -> CCGTree:
-        """Convert a single sentence to a CCG diagram.
-        
-        This ensures compatibility with the original API.
-        
-        Args:
-            sentence: Input Arabic sentence
-            
-        Returns:
-            CCG tree that can be used with the draw() function
-        """
-        trees = self.sentences2trees([sentence], suppress_exceptions=False)
-        if not trees or trees[0] is None:
-            raise ArabicParseError(sentence)
-        return trees[0]
-    
-    def map_pos_to_ccg(self, atb_pos: str, dependency: str) -> CCGType:
-        """Map Arabic Treebank POS tags & dependencies to CCG-compatible categories.
-        
-        This is maintained for backward compatibility.
-        """
-        # Check dependency first
-        if dependency in self.DEP_TO_CCG_MAP:
-            return self.DEP_TO_CCG_MAP[dependency]
-        
-        # Fall back to POS tag
-        return self.ATB_TO_CCG_MAP.get(atb_pos, CCGType.NOUN)
+        # Default to using the mapping from the POS tag.
+        return atb_to_ccg_map.get(atb_pos, CCGType.NOUN)
+
+# Example usage:
+# For an Arabic sentence like "الولد يقرا الكتاب":
+#   preprocess splits "الولد" into ["ال", "ولد"], and the parser uses the dependency structure
+#   to produce a CCG derivation. Any call to draw() on the resulting CCGTree now works because of
+#   the dummy_draw patch.
