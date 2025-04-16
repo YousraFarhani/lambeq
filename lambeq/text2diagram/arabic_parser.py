@@ -8,14 +8,39 @@ from collections.abc import Iterable
 from typing import Any
 from lambeq.text2diagram.ccg_parser import CCGParser
 from lambeq.text2diagram.ccg_rule import CCGRule
-from lambeq.text2diagram.ccg_tree import CCGTree  # Represents the hierarchical CCG structure
-from lambeq.text2diagram.ccg_type import CCGType  # Represents CCG categories, such as NOUN, VERB
-from lambeq.core.globals import VerbosityLevel  # Controls the verbosity level of the parser
+from lambeq.text2diagram.ccg_tree import CCGTree  # The original CCGTree class (unchanged)
+from lambeq.text2diagram.ccg_type import CCGType  # Represents CCG categories, e.g. NOUN, VERB
+from lambeq.core.globals import VerbosityLevel  # Controls the verbosity level
 from lambeq.core.utils import (
     SentenceBatchType, tokenised_batch_type_check,
     untokenised_batch_type_check
-)  # Batch processing type hints and validators
+)
 
+################################################################################
+# Subclass CCGTree to include a draw() method
+################################################################################
+
+class MyCCGTree(CCGTree):
+    def draw(self, indent: int = 0) -> None:
+        """
+        Recursively prints a textual representation of the tree.
+        You can extend this to produce graphical output if needed.
+        """
+        # Use the text if present; otherwise, show the rule.
+        label = self.text if self.text is not None else str(self.rule)
+        print("  " * indent + label)
+        if self.children:
+            for child in self.children:
+                # If the child already has a draw method, use it; otherwise, print its text.
+                if hasattr(child, "draw"):
+                    child.draw(indent + 1)
+                else:
+                    child_label = child.text if child.text is not None else str(child.rule)
+                    print("  " * (indent + 1) + child_label)
+
+################################################################################
+# Exception class for errors during parsing.
+################################################################################
 
 class ArabicParseError(Exception):
     def __init__(self, sentence: str) -> None:
@@ -24,29 +49,30 @@ class ArabicParseError(Exception):
     def __str__(self) -> str:
         return f"ArabicParser failed to parse {self.sentence!r}."
 
+################################################################################
+# ArabicParser class
+################################################################################
 
 class ArabicParser(CCGParser):
     """
     Enhanced Arabic CCG parser based on Stanza and the methodology described in:
     "An Arabic CCG Approach for Determining Constituent Types from Arabic Treebank".
 
-    This parser includes:
-      - Preprocessing: normalization, vowel removal, and attached-determiner segmentation.
-      - Tag normalization covering many ATB tags and special cases such as verb morphology,
-        negation, determiners, adjectives, adverbs, particles, symbols, etc.
-      - Mapping of normalized ATB tags and dependency relations to preliminary CCG types.
-      - A rudimentary constituent-type determination (head versus complement).
-      - A simple binary tree formation (to be extended with full binarization methods).
-      
-    Additionally, a `sentence2diagram` method is provided so that the user can
-    directly convert a sentence to a diagram and draw it.
+    Features:
+      - Preprocessing: normalization, vowel removal, and segmentation of attached determiners.
+      - Extended tag normalization and mapping to CCG types.
+      - A rudimentary determination of constituent types (head versus complement).
+      - A simple binary tree formation.
+      - Provides a sentence2diagram method so you can convert a single sentence to a diagram.
+    
+    All trees produced are MyCCGTree instances, so that they support the draw() method.
     """
-
+    
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
         self.verbose = verbose
         if not VerbosityLevel.has_value(verbose):
             raise ValueError(f"`{verbose}` is not a valid verbose value for ArabicParser.")
-        # Download and initialize the Arabic Stanza pipeline with necessary processors.
+        # Download and initialize the Arabic Stanza pipeline.
         stanza.download('ar', processors='tokenize,pos,lemma,depparse')
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse')
 
@@ -54,14 +80,14 @@ class ArabicParser(CCGParser):
                         sentences: SentenceBatchType,
                         tokenised: bool = False,
                         suppress_exceptions: bool = False,
-                        verbose: str | None = None) -> list[CCGTree | None]:
+                        verbose: str | None = None) -> list[MyCCGTree | None]:
         """
-        Convert multiple Arabic sentences to CCG trees.
+        Convert one or more Arabic sentences to CCG trees.
         Processing steps:
-          1. Preprocess sentences (normalize, remove vowels, determiner segmentation).
-          2. Parse the preprocessed tokens with Stanza for an ATB-like structure.
-          3. Convert the ATB parse into a preliminary CCG derivation.
-          4. Determine constituent types (head, complement, adjunct) via heuristics.
+          1. Preprocess sentences (normalization, removal of vowels, segmentation).
+          2. Parse the tokens to obtain an ATB-like representation.
+          3. Convert the ATB parse into a preliminary binary CCG derivation.
+          4. Determine constituent types (currently, a simple head/complement assignment).
         """
         if verbose is None:
             verbose = self.verbose
@@ -74,8 +100,8 @@ class ArabicParser(CCGParser):
             if not untokenised_batch_type_check(sentences):
                 raise ValueError('`tokenised` is False but sentences do not have type List[str].')
             sentences = [self.preprocess(sentence) for sentence in sentences]
-
-        trees: list[CCGTree] = []
+        
+        trees: list[MyCCGTree] = []
         for sentence in sentences:
             try:
                 atb_tree = self.parse_atb(sentence)
@@ -90,14 +116,15 @@ class ArabicParser(CCGParser):
         return trees
 
     def sentence2diagram(self, sentence: str, tokenised: bool = False,
-                         suppress_exceptions: bool = False, verbose: str | None = None) -> CCGTree:
+                         suppress_exceptions: bool = False, verbose: str | None = None) -> MyCCGTree:
         """
-        Convert a single sentence to a CCG diagram (tree).
-        This helper method wraps sentences2trees so that a single sentence is processed
-        and its corresponding diagram (CCGTree) is returned.
+        Convert a single Arabic sentence to a CCG diagram (tree).
+        This method wraps sentences2trees for processing a single sentence.
         """
-        trees = self.sentences2trees([sentence], tokenised=tokenised,
-                                      suppress_exceptions=suppress_exceptions, verbose=verbose)
+        trees = self.sentences2trees([sentence],
+                                       tokenised=tokenised,
+                                       suppress_exceptions=suppress_exceptions,
+                                       verbose=verbose)
         if not trees or trees[0] is None:
             raise ArabicParseError(sentence)
         return trees[0]
@@ -105,10 +132,10 @@ class ArabicParser(CCGParser):
     def preprocess(self, sentence: str) -> list[str]:
         """
         Normalize and tokenize Arabic text:
-         - Remove extraneous vowels/diacritics.
-         - Apply basic tokenization.
-         - Segment attached determiners (e.g., splitting "الكتاب" into "ال" and "كتاب").
-         - Optionally reverse token order for display conventions.
+         - Remove vowels/diacritics.
+         - Tokenize words.
+         - Segment attached determiners (e.g., split "الكتاب" into "ال" and "كتاب").
+         - Reverse the token order if needed.
         """
         sentence = self.remove_vowels(sentence)
         tokens = re.findall(r'\b\w+\b', sentence)
@@ -130,8 +157,13 @@ class ArabicParser(CCGParser):
 
     def parse_atb(self, tokens: list[str]) -> list[dict]:
         """
-        Parse tokens into an ATB-like structure using Stanza.
-        Each token is represented as a dictionary with word, lemma, normalized POS, head index, and dependency relation.
+        Parse a sentence (represented as a list of tokens) using Stanza to produce
+        an ATB-like structure. Each token is represented as a dictionary containing:
+          - word
+          - lemma
+          - normalized POS tag
+          - head index
+          - dependency relation
         """
         sentence = " ".join(tokens)
         doc = self.nlp(sentence)
@@ -150,22 +182,13 @@ class ArabicParser(CCGParser):
 
     def normalize_tag(self, atb_pos: str, word: str) -> str:
         """
-        Normalize ATB tags to a more compact set.
-        
-        Covers:
-          - Punctuation: Return the punctuation symbol if the word is punctuation.
-          - Verb forms: Map VERB_PERFECT, VERB_IMPERFECT, PVSUFF_SUBJ, etc.
-          - Determiners: DET, DEM.
-          - Adjectives: AD, JJ, JJR, JJS.
-          - Adverbs: ADV, ADVP, RB.
-          - Particles: RP.
-          - Symbols and foreign words.
-          - Additional special cases.
+        Normalize ATB tags to a compact standard.
+        Handles punctuation, various verb forms, determiners, adjectives, adverbs,
+        and additional special cases.
         """
-        # Check for punctuation symbols
+        # Punctuation check
         if re.fullmatch(r'[.,?!:;«»()\u060C]', word):
             return word
-
         # Special handling for verb forms
         if "VERB_PERFECT" in atb_pos:
             return "VBD"
@@ -175,20 +198,17 @@ class ArabicParser(CCGParser):
             if "NEG_PART" in atb_pos:
                 return "VBP"
             return "VB"
-
-        # NO_FUNC handling: if the token is "و", map to conjunction; else try punctuation or proper noun.
+        # NO_FUNC: e.g. if token is "و"
         if atb_pos == "NO_FUNC":
             if word == "و":
                 return "CC"
             return "NNP" if not re.fullmatch(r'[.,?!:;]', word) else word
-
-        # Handle non-alphabetic or non-Arabic tokens.
+        # Non-alphabetic or non-Arabic
         if atb_pos in ["NON_ALPHABETIC", "NON_ARABIC"]:
             if word.isnumeric():
                 return "CD"
             return "FW"
-
-        # Extended mapping for common tags and additional cases.
+        # Extended mapping
         tag_map = {
             "NN": "NN",
             "NNS": "NN",
@@ -220,28 +240,28 @@ class ArabicParser(CCGParser):
             "CD": "CD",
             "UH": "UH",
             "SYM": "SYM",
-            # Additional mappings can be added here as needed.
         }
         return tag_map.get(atb_pos, atb_pos)
 
-    def convert_to_ccg(self, atb_tree: list[dict]) -> CCGTree:
+    def convert_to_ccg(self, atb_tree: list[dict]) -> MyCCGTree:
         """
         Convert the ATB parse (list of token dictionaries) into a binary CCG derivation tree.
-        Each token is assigned a preliminary CCG type based on its normalized POS and dependency.
+        Each token is mapped to a preliminary CCG type using its normalized POS and dependency relation.
+        The resulting nodes are created as instances of MyCCGTree.
         """
         nodes = []
         for entry in atb_tree:
-            # Reverse the word text if needed for display.
+            # Reverse the word text for proper Arabic display.
             word = entry["word"][::-1]
             pos = entry["pos"]
             dependency = entry["dep"]
             ccg_category = self.map_pos_to_ccg(pos, dependency)
-            nodes.append(CCGTree(text=word, rule=CCGRule.LEXICAL, biclosed_type=ccg_category))
-        # Combine nodes pairwise using a simple forward application.
+            nodes.append(MyCCGTree(text=word, rule=CCGRule.LEXICAL, biclosed_type=ccg_category))
+        # Simple binary tree formation via forward application.
         while len(nodes) > 1:
             left = nodes.pop(0)
             right = nodes.pop(0)
-            parent = CCGTree(
+            parent = MyCCGTree(
                 text=None,
                 rule=CCGRule.FORWARD_APPLICATION,
                 children=[left, right],
@@ -253,18 +273,12 @@ class ArabicParser(CCGParser):
     def map_pos_to_ccg(self, norm_pos: str, dependency: str) -> CCGType:
         """
         Map normalized ATB POS tags and dependency relations to preliminary CCG types.
-        
-        Extended to cover additional cases, including:
-          - Determiners (DET, DEM) as functions from N to N.
-          - Adjectives (JJ, AD) as modifiers.
-          - Adverbs (ADV, ADVP, RB) producing S/S.
-          - Various verb forms mapping to S\NP.
-          - Particles, symbols, and foreign words.
+        Extended to cover determiners, adjectives, adverbs, verb forms, etc.
         """
         atb_to_ccg = {
             "NN": CCGType.NOUN,
             "NNS": CCGType.NOUN,
-            "NNP": CCGType.NOUN,  # Optionally, a specialized proper noun type may be used.
+            "NNP": CCGType.NOUN,  # Optionally, one may use a specialized proper noun type.
             "VB": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
             "VBD": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
             "VBP": CCGType.SENTENCE.slash("\\", CCGType.NOUN_PHRASE),
@@ -289,10 +303,9 @@ class ArabicParser(CCGParser):
             "CD": CCGType.NOUN.slash("/", CCGType.NOUN),
             "UH": CCGType.CONJUNCTION,
             "SYM": CCGType.NOUN,
-            "FW": CCGType.NOUN  # Fallback for foreign words.
-            # More mappings can be added here as needed.
+            "FW": CCGType.NOUN,
         }
-        # Additional dependency-based refinements
+        # Further refinement via dependency relations:
         if dependency in ["amod", "acl"]:
             return CCGType.NOUN.slash("/", CCGType.NOUN)
         if dependency in ["nsubj", "csubj", "root"]:
@@ -301,29 +314,15 @@ class ArabicParser(CCGParser):
             return CCGType.NOUN_PHRASE
         return atb_to_ccg.get(norm_pos, CCGType.NOUN)
 
-    def determine_constituent_types(self, tree: CCGTree) -> CCGTree:
+    def determine_constituent_types(self, tree: MyCCGTree) -> MyCCGTree:
         """
-        Determine constituent types (head, complement, adjunct) in the binary CCG tree.
-        A simple heuristic marks the first child as the head and all others as complements.
-        Extend this function with further heuristics for adjuncts and complex constructions.
+        Using simple heuristics, mark the first child of a node as the head and others as complements.
+        This function recursively annotates the tree.
         """
-        def assign_types(node: CCGTree) -> None:
+        def assign_types(node: MyCCGTree) -> None:
             if node.children:
                 for i, child in enumerate(node.children):
                     child.annotation = "head" if i == 0 else "complement"
                     assign_types(child)
         assign_types(tree)
         return tree
-
-
-# Example usage:
-if __name__ == '__main__':
-    # Sample Arabic sentence: "عذاب اليم" (for example)
-    sentences = [
-        "عذاب اليم"
-    ]
-    parser = ArabicParser()
-    
-    # Convert a single sentence to a diagram using the new sentence2diagram helper
-    diagram = parser.sentence2diagram("عذاب اليم")
-    diagram.draw()
