@@ -4,8 +4,7 @@ __all__ = ['ArabicParser', 'ArabicParseError']
 
 import stanza
 import re
-from collections.abc import Iterable
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Optional
 
 from lambeq.text2diagram.ccg_parser import CCGParser
 from lambeq.text2diagram.ccg_rule import CCGRule
@@ -180,24 +179,28 @@ def convert_atb_node_to_ccg(node: ATBNode, parser: ArabicParser) -> CCGTree:
         combined = left_tree
     return combined
 
-# Full ArabicParser Implementation
-
 class ArabicParseError(Exception):
     def __init__(self, sentence: str) -> None:
         self.sentence = sentence
 
     def __str__(self) -> str:
-        return f'ArabicParser failed to parse {self.sentence!r}.'
+        return f"ArabicParser failed to parse {self.sentence!r}."
 
 class ArabicParser(CCGParser):
+    """
+    CCG parser for Arabic using Stanza and a simple ATB conversion.
+    This implementation performs a simplified conversion:
+      - Preprocess: tokenize, split attached "ال", and reverse token order.
+      - Parse: use Stanza to produce token-level ATB info.
+      - Convert: build a binary CCG derivation tree using forward application.
+    """
     def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
         self.verbose = verbose
         if not VerbosityLevel.has_value(verbose):
-            raise ValueError(f'`{verbose}` is not a valid verbose value for ArabicParser.')
+            raise ValueError(f"`{verbose}` is not a valid verbose value for ArabicParser.")
         stanza.download('ar', processors='tokenize,pos,lemma,depparse', verbose=False)
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse', verbose=False)
 
-    # This method's signature now exactly matches the abstract method.
     def sentences2trees(self,
                         sentences: SentenceBatchType,
                         tokenised: bool = False,
@@ -234,14 +237,14 @@ class ArabicParser(CCGParser):
             "DT": CCGType.NOUN.slash("/", CCGType.NOUN),
             "JJ": CCGType.NOUN.slash("\\", CCGType.NOUN),
             "PRP": CCGType.NOUN_PHRASE,
+            "CC": CCGType.CONJUNCTION,
             "RB": CCGType.SENTENCE.slash("/", CCGType.SENTENCE),
             "CD": CCGType.NOUN.slash("/", CCGType.NOUN),
-            "CC": CCGType.CONJUNCTION,
             "PUNC": CCGType.PUNCTUATION,
-            "FW": CCGType.FOREIGN,
+            "FW": CCGType.NOUN,  # Map foreign words to NOUN because CCGType.FOREIGN does not exist.
         }
         if dependency in ["amod", "acl"]:
-            return CCGType.NOUN.slash("\\", CCGType.NOUN)
+            return CCGType.NOUN.slash("/", CCGType.NOUN)
         elif dependency in ["nsubj", "csubj"]:
             return CCGType.NOUN_PHRASE
         elif dependency in ["obj", "iobj"]:
