@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+__all__ = ['ArabicParser', 'ArabicParseError']
+
 """Arabic → CCG parser for lambeq diagrams (AG‑format ATB)
 ===========================================================
 Now *fully automatic*: the parser will **segment user input clitics at
