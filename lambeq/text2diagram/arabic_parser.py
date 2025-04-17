@@ -1,27 +1,30 @@
 from __future__ import annotations
 """Arabic → CCG parser for lambeq diagrams (AG‑format ATB)
-================================================================
-This revision *fully* decomposes Arabic clitic strings according to the
-morphological tag list provided by the ATB:
+===========================================================
+Now *fully automatic*: the parser will **segment user input clitics at
+runtime** so that unspaced forms like «وبالكتاب» match ATB trees that were
+saved with separate tokens «و», «ب», «الكتاب».
 
-* **CONJ**  – prefixes «و», «ف»
-* **PREP**  – prefixes «ب», «ل», «ك»
-* **DET**   – proclitic «ال»
+What’s new
+----------
+1. **`_segment_token`** — splits leading conjunction, preposition, determiner
+   according to ATB tag logic.
+2. **`_tokenise`** — applies regex tokenisation *then* segments each token,
+   yielding a list identical to Treebank leaves.
+3. Cleaned duplicate `_shape` definition and use full RTL shaping (reshaper +
+   python‑bidi + RLE/PDF markers).
 
-The splitter walks through the tag parts in order and carves the token so that
-*every* tag component becomes its own pre‑terminal leaf in the constituency
-fragment.  This guarantees that all tags are represented in the resulting CCG
-diagram — no more missing `PREP`, `DET`, etc.
-
-Arabic glyph shaping is performed with **`arabic‑reshaper`**.  We *do not* run
-`python‑bidi`; Graphviz already renders RTL correctly once glyphs are joined.
-Install once:
+```python
+parser = ArabicParser('/content/atb')
+d = parser.sentence2diagram('وبالكتاب')  # works – splits into 4 leaves
 ```
-pip install arabic-reshaper
+Install once:
+```bash
+pip install arabic-reshaper python-bidi
 ```
 """
-
-import os, re, stanza, nltk, arabic_reshaper
+import os, re, stanza, arabic_reshaper
+from bidi.algorithm import get_display
 from nltk import Tree
 from lambeq.text2diagram.ccg_parser import CCGParser
 from lambeq.text2diagram.ccg_tree import CCGTree
@@ -32,10 +35,13 @@ from lambeq.core.globals import VerbosityLevel
 # ---------------------------------------------------------------------------
 # RTL shaping helper
 # ---------------------------------------------------------------------------
+BIDI_RLE = "\u202B"  # Right‑to‑Left Embedding
+BIDI_PDF = "\u202C"  # Pop Directional Formatting
 
-def _shape(token: str) -> str:
-    """Return glyph‑joined RTL string suitable for Graphviz labels."""
-    return arabic_reshaper.reshape(token)
+def _shape(t: str) -> str:
+    reshaped = arabic_reshaper.reshape(t)
+    bidi = get_display(reshaped)
+    return f"{BIDI_RLE}{bidi}{BIDI_PDF}"
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -55,10 +61,8 @@ class ArabicParser(CCGParser):
         if not VerbosityLevel.has_value(verbose):
             raise ValueError(f"Invalid verbosity: {verbose}")
         self.verbose = verbose
-
         stanza.download('ar', processors='tokenize,pos,lemma,depparse')
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse')
-
         self.trees: list[Tree] = []
         for fn in os.listdir(ag_root):
             if fn.endswith('.txt'):
@@ -91,7 +95,7 @@ class ArabicParser(CCGParser):
                         buf.clear()
 
     # ------------------------------------------------------------------
-    # Placeholder substitution with full clitic decomposition
+    # Placeholder substitution with clitic decomposition
     # ------------------------------------------------------------------
     def _inject_leaves(self, tree_str: str, tok_map: dict, tag_map: dict):
         for wid, token in tok_map.items():
@@ -103,29 +107,20 @@ class ArabicParser(CCGParser):
         except ValueError:
             return None
 
-    # Decompose token based on tag list ---------------------------------
     def _expand_token(self, token: str, tag_str: str) -> str:
         parts = tag_str.split('+')
-        leaves: list[tuple[str, str]] = []
+        leaves = []
         t = token
-        # 1) CONJ prefix «و», «ف»
+        # CONJ
         if 'CONJ' in parts and t and t[0] in 'وف':
-            leaves.append(('CONJ', t[0]))
-            t = t[1:]
-            parts.remove('CONJ')
-        # 2) PREP prefix «ب», «ل», «ك»
+            leaves.append(('CONJ', t[0])); t = t[1:]; parts.remove('CONJ')
+        # PREP
         if 'PREP' in parts and t and t[0] in 'بللك':
-            leaves.append(('PREP', t[0]))
-            t = t[1:]
-            parts.remove('PREP')
-        # 3) DET proclitic «ال»
+            leaves.append(('PREP', t[0])); t = t[1:]; parts.remove('PREP')
+        # DET
         if 'DET' in parts and t.startswith('ال'):
-            leaves.append(('DET', 'ال'))
-            t = t[2:]
-            parts.remove('DET')
-        # 4) Remainder
+            leaves.append(('DET', 'ال')); t = t[2:]; parts.remove('DET')
         leaves.append(('+'.join(parts) or 'NOUN', t))
-        # Build s‑expression fragment
         return ' '.join(f'({re.sub(r"[()\s]", "_", tag)} {_shape(tok)})' for tag, tok in leaves if tok)
 
     # ------------------------------------------------------------------
@@ -135,7 +130,8 @@ class ArabicParser(CCGParser):
         return self.sentences2diagrams([s], **kw)[0]
 
     def sentences2diagrams(self, sentences, **kw):
-        return [None if t is None else self.to_diagram(t) for t in self.sentences2trees(sentences, **kw)]
+        return [None if t is None else self.to_diagram(t)
+                for t in self.sentences2trees(sentences, **kw)]
 
     def sentences2trees(self, sentences, suppress_exceptions=False, **kw):
         out = []
@@ -148,12 +144,36 @@ class ArabicParser(CCGParser):
         return out
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Tokenisation that AUTO‑SEGMENTS clitics
     # ------------------------------------------------------------------
-    @staticmethod
-    def _tokenise(text: str):
-        return re.findall(r'\b\w+\b', text)
+    _conj = 'وف'
+    _prep = 'بللك'
 
+    @classmethod
+    def _segment_token(cls, tok: str):
+        segs = []
+        t = tok
+        if t and t[0] in cls._conj:
+            segs.append(t[0]); t = t[1:]
+        if t and t[0] in cls._prep:
+            segs.append(t[0]); t = t[1:]
+        if t.startswith('ال'):
+            segs.extend(['ال', t[2:]] if len(t) > 2 else ['ال'])
+        else:
+            segs.append(t)
+        return segs
+
+    @classmethod
+    def _tokenise(cls, text: str):
+        raw = re.findall(r'\b\w+\b', text)
+        tokens: list[str] = []
+        for tok in raw:
+            tokens.extend(cls._segment_token(tok))
+        return tokens
+
+    # ------------------------------------------------------------------
+    # Tree lookup & conversion
+    # ------------------------------------------------------------------
     def _find_tree(self, tokens):
         for t in self.trees:
             if t.leaves() == tokens:
@@ -161,7 +181,6 @@ class ArabicParser(CCGParser):
         raise ArabicParseError(' '.join(tokens))
 
     def _to_ccg(self, t: Tree):
-        # pre‑terminal
         if len(t) == 1 and isinstance(t[0], str):
             return CCGTree(text=t[0], rule=CCGRule.LEXICAL, biclosed_type=self._map_pos(t.label()))
         kids = [self._to_ccg(c) for c in t]
@@ -170,7 +189,9 @@ class ArabicParser(CCGParser):
             root = CCGTree(text=None, rule=CCGRule.FORWARD_APPLICATION, children=[root, r], biclosed_type=CCGType.SENTENCE)
         return root
 
-    # Coarse POS → CCG ---------------------------------------------------
+    # ------------------------------------------------------------------
+    # POS → CCG
+    # ------------------------------------------------------------------
     def _map_pos(self, tag: str):
         segs = tag.split('+')
         if 'DET' in segs:   return CCGType.NOUN.slash('/', CCGType.NOUN)
@@ -178,6 +199,6 @@ class ArabicParser(CCGParser):
         if 'ADJ' in segs:   return CCGType.NOUN.slash('/', CCGType.NOUN)
         if 'PREP' in segs:  return CCGType.NOUN_PHRASE.slash('\\', CCGType.NOUN_PHRASE)
         if 'CONJ' in segs or 'PUNC' in segs: return CCGType.CONJUNCTION
-        if any(v in segs[0] for v in ('VB', 'IV', 'PV')):  # verbs often first segment
+        if any(v in segs[0] for v in ('VB', 'IV', 'PV')):
             return CCGType.SENTENCE.slash('\\', CCGType.NOUN_PHRASE)
         return CCGType.NOUN
