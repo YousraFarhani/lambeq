@@ -29,8 +29,8 @@ class ArabicParser(CCGParser):
         self.verbose = verbose
 
         # Download and initialize Stanza for morphological features
-        stanza.download('ar', processors='tokenize,mwt,pos,lemma,depparse,morph')
-        self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse,morph')
+        stanza.download('ar', processors='tokenize,mwt,pos,lemma,depparse')
+        self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse')
 
         # Load all bracketed constituency trees from TXT files
         if not os.path.isdir(treebank_txt_root):
