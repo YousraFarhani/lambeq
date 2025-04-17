@@ -1,183 +1,159 @@
 from __future__ import annotations
-
-__all__ = ['ArabicParser', 'ArabicParseError']
-
-import stanza
+import os
 import re
-from typing import Any, List, Dict
+import stanza
+import nltk
+from nltk import Tree
 from lambeq.text2diagram.ccg_parser import CCGParser
-from lambeq.text2diagram.ccg_rule import CCGRule
 from lambeq.text2diagram.ccg_tree import CCGTree
+from lambeq.text2diagram.ccg_rule import CCGRule
 from lambeq.text2diagram.ccg_type import CCGType
 from lambeq.core.globals import VerbosityLevel
-from lambeq.core.utils import (SentenceBatchType, tokenised_batch_type_check,
-                               untokenised_batch_type_check)
-
 
 class ArabicParseError(Exception):
-    def __init__(self, sentence: Any) -> None:
+    def __init__(self, sentence: str) -> None:
         self.sentence = sentence
-
     def __str__(self) -> str:
-        return f'ArabicParser failed to parse {self.sentence!r}.'
-
+        return f"ArabicParser failed to parse {self.sentence!r}."
 
 class ArabicParser(CCGParser):
-    """CCG parser for Arabic using Stanza and/or ATB dataset files."""
+    """CCG parser for Arabic using bracketed Treebank TXT files and lambeq diagrams."""
 
-    def __init__(self, verbose: str = VerbosityLevel.PROGRESS.value, **kwargs: Any) -> None:
+    def __init__(self,
+                 treebank_txt_root: str,
+                 verbose: str = VerbosityLevel.PROGRESS.value,
+                 **kwargs) -> None:
+        super().__init__(verbose=verbose, **kwargs)
         if not VerbosityLevel.has_value(verbose):
-            raise ValueError(f'`{verbose}` is not valid for ArabicParser.')
+            raise ValueError(f'`{verbose}` is not valid.')
         self.verbose = verbose
-        stanza.download('ar', processors='tokenize,pos,lemma,depparse')
-        self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse')
 
-    def load_atb_file(self, file_path: str) -> List[Dict[str, Any]]:
-        """
-        Load ATB file and extract token-level morphology based on the t: tag entries.
-        Features list is derived directly from ATB tags (e.g., DET, CASE_DEF_GEN).
-        """
-        s_lines, t_lines = [], []
-        with open(file_path, encoding='utf-8') as f:
-            for line in f:
-                if line.startswith('s:'):
-                    s_lines.append(line.strip())
-                elif line.startswith('t:'):
-                    t_lines.append(line.strip())
-        entries: List[Dict[str, Any]] = []
-        for s_line, t_line in zip(s_lines, t_lines):
-            s_fields = s_line.split('·')
-            word = s_fields[1]
-            t_fields = t_line.split('·')
-            tag_string = t_fields[1]
-            lemma = t_fields[5] if len(t_fields) > 5 else None
-            # Split POS+features directly from ATB tag
-            pos_parts = tag_string.split('+')
-            base_pos = pos_parts[0]
-            features = pos_parts[1:]
-            entries.append({'word': word, 'lemma': lemma, 'pos': base_pos, 'features': features})
-        return entries
+        # Download and initialize Stanza for morphological features
+        stanza.download('ar', processors='tokenize,mwt,pos,lemma,depparse,morph')
+        self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse,morph')
 
-    def sentences2trees(
-        self,
-        sentences: SentenceBatchType,
-        tokenised: bool = False,
-        suppress_exceptions: bool = False,
-        verbose: str | None = None
-    ) -> list[CCGTree | None]:
+        # Load all bracketed constituency trees from TXT files
+        if not os.path.isdir(treebank_txt_root):
+            raise ValueError(f"Treebank directory '{treebank_txt_root}' not found.")
+        self.atb_trees: list[nltk.Tree] = []
+        for fname in os.listdir(treebank_txt_root):
+            if not fname.endswith('.txt'):
+                continue
+            path = os.path.join(treebank_txt_root, fname)
+            with open(path, encoding='utf8') as f:
+                for line in f:
+                    line = line.strip()
+                    # skip empty or non-tree lines
+                    if not line or not line.startswith('('):
+                        continue
+                    try:
+                        tree = Tree.fromstring(line)
+                        self.atb_trees.append(tree)
+                    except Exception:
+                        # malformed line
+                        continue
+        if not self.atb_trees:
+            raise ValueError("No valid bracketed trees found in the provided .txt files.")
+
+    def sentences2trees(self,
+                        sentences: list[str],
+                        tokenised: bool = False,
+                        suppress_exceptions: bool = False,
+                        verbose: str | None = None) -> list[CCGTree | None]:
+        """Convert Arabic sentences to CCG trees using bracketed Treebank data."""
         if verbose is None:
             verbose = self.verbose
         if not VerbosityLevel.has_value(verbose):
-            raise ValueError(f'Invalid verbose value: {verbose}')
-        if tokenised:
-            if not tokenised_batch_type_check(sentences):
-                raise ValueError('Batch must be List[List[str]] when tokenised=True.')
-        else:
-            if not untokenised_batch_type_check(sentences):
-                raise ValueError('Batch must be List[str] when tokenised=False.')
-            sentences = [self.preprocess(str(s)) for s in sentences]
+            raise ValueError(f'`{verbose}` is not valid.')
 
-        trees: list[CCGTree | None] = []
-        for sentence in sentences:
+        trees: list[CCGTree] = []
+        for sent in sentences:
             try:
-                if isinstance(sentence, list) and sentence and isinstance(sentence[0], dict):
-                    atb_entries = sentence
-                else:
-                    atb_entries = self.parse_stanza(sentence)
-                ccg_tree = self.convert_to_ccg(atb_entries)
+                tokens = self._normalize(sent)
+                atb_tree = self._find_matching_tree(tokens)
+                ccg_tree = self._convert_constituency_to_ccg(atb_tree)
                 trees.append(ccg_tree)
             except Exception as e:
                 if suppress_exceptions:
                     trees.append(None)
                 else:
-                    raise ArabicParseError(sentence) from e
+                    raise ArabicParseError(sent) from e
         return trees
 
-    def preprocess(self, sentence: str) -> list[str]:
-        """Simple tokenization preserving full words (no splitting)."""
+    def sentences2diagrams(self,
+                            sentences: list[str],
+                            tokenised: bool = False,
+                            planar: bool = False,
+                            collapse_noun_phrases: bool = True,
+                            suppress_exceptions: bool = False,
+                            verbose: str | None = None):
+        """Parse to lambeq diagrams (with .draw()) in batch."""
+        trees = self.sentences2trees(
+            sentences,
+            tokenised=tokenised,
+            suppress_exceptions=suppress_exceptions,
+            verbose=verbose
+        )
+        return [None if t is None else self.to_diagram(t, planar=planar, collapse_noun_phrases=collapse_noun_phrases) for t in trees]
+
+    def sentence2diagram(self,
+                          sentence: str,
+                          tokenised: bool = False,
+                          planar: bool = False,
+                          collapse_noun_phrases: bool = True,
+                          suppress_exceptions: bool = False,
+                          verbose: str | None = None):
+        """Parse single sentence to lambeq Diagram with .draw()."""
+        return self.sentences2diagrams(
+            [sentence], tokenised=tokenised,
+            planar=planar,
+            collapse_noun_phrases=collapse_noun_phrases,
+            suppress_exceptions=suppress_exceptions,
+            verbose=verbose
+        )[0]
+
+    def _normalize(self, sentence: str) -> list[str]:
+        """Simple whitespace and punctuation-based tokenization."""
         return re.findall(r'\b\w+\b', sentence)
 
-    def parse_stanza(self, tokens: list[str]) -> list[Dict[str, Any]]:
-        """
-        Parse a list of Arabic tokens with Stanza.
-        Feature list is empty unless augmented by external morphological tools.
-        """
-        sentence = ' '.join(tokens)
-        doc = self.nlp(sentence)
-        parsed: List[Dict[str, Any]] = []
-        for sent in doc.sentences:
-            for w in sent.words:
-                parsed.append({
-                    'word': w.text,
-                    'lemma': w.lemma,
-                    'pos': w.xpos,
-                    'features': [],  # no ATB morphology here
-                    'head': w.head,
-                    'dep': w.deprel
-                })
-        return parsed
+    def _find_matching_tree(self, tokens: list[str]) -> nltk.Tree:
+        """Locate an ATB tree whose leaves match the token list."""
+        for tree in self.atb_trees:
+            if tree.leaves() == tokens:
+                return tree
+        raise ArabicParseError("No matching bracketed tree for tokens: " + " ".join(tokens))
 
-    def convert_to_ccg(self, atb_entries: list[Dict[str, Any]]) -> CCGTree:
-        nodes: list[CCGTree] = []
-        for entry in atb_entries:
-            word = entry['word']
-            pos = entry['pos']
-            features = entry.get('features', [])
-            ccg_cat = self.map_pos_to_ccg(pos, features)
-            node = CCGTree(text=word, rule=CCGRule.LEXICAL, biclosed_type=ccg_cat)
-            node.morphology = {'pos': pos, 'features': features}
-            node.semantic = self.map_semantic(pos, features)
-            nodes.append(node)
-        # build binary tree
-        while len(nodes) > 1:
-            left = nodes.pop(0)
-            right = nodes.pop(0)
-            parent = CCGTree(
+    def _convert_constituency_to_ccg(self, tree: nltk.Tree) -> CCGTree:
+        """Recursively convert an NLTK Tree to a lambeq CCGTree."""
+        if isinstance(tree, str):
+            raise ValueError("Unexpected string node encountered.")
+        # Leaf preterminals
+        if len(tree) == 1 and isinstance(tree[0], str):
+            word = tree[0]
+            pos = tree.label()
+            cat = self._map_pos_to_ccg(pos)
+            return CCGTree(text=word, rule=CCGRule.LEXICAL, biclosed_type=cat)
+        # Internal: binarize children leftward
+        children = [self._convert_constituency_to_ccg(c) for c in tree]
+        left = children[0]
+        for right in children[1:]:
+            left = CCGTree(
                 text=None,
                 rule=CCGRule.FORWARD_APPLICATION,
                 children=[left, right],
                 biclosed_type=CCGType.SENTENCE
             )
-            nodes.insert(0, parent)
-        return nodes[0]
+        return left
 
-    def map_pos_to_ccg(self, pos: str, features: list[str]) -> CCGType:
-        base = pos.split('+')[0]
-        mapping = {
+    def _map_pos_to_ccg(self, pos: str) -> CCGType:
+        """Map PTB-style tags to CCG categories (extend as needed)."""
+        m = {
             'NN': CCGType.NOUN,
-            'NOUN': CCGType.NOUN,
-            'NOUN_PROP': CCGType.NOUN,
-            'NOUN_NUM': CCGType.NOUN,
+            'NNS': CCGType.NOUN,
             'VB': CCGType.SENTENCE.slash('\\', CCGType.NOUN_PHRASE),
-            'PREP': CCGType.NOUN_PHRASE.slash('\\', CCGType.NOUN_PHRASE),
-            'DET': CCGType.NOUN.slash('/', CCGType.NOUN),
+            'VBD': CCGType.SENTENCE.slash('\\', CCGType.NOUN_PHRASE),
+            'DT': CCGType.NOUN.slash('/', CCGType.NOUN),
             'JJ': CCGType.NOUN.slash('/', CCGType.NOUN),
-            'PRP': CCGType.NOUN_PHRASE,
-            'CC': CCGType.CONJUNCTION,
-            'RB': CCGType.SENTENCE.slash('/', CCGType.SENTENCE),
-            'CD': CCGType.NOUN.slash('/', CCGType.NOUN),
-            'UH': CCGType.CONJUNCTION
+            'IN': CCGType.NOUN_PHRASE.slash('\\', CCGType.NOUN_PHRASE),
         }
-        # treat determiners as noun modifiers
-        if base == 'DET' or 'DET' in features:
-            return CCGType.NOUN_PHRASE
-        return mapping.get(base, CCGType.NOUN)
-
-    def map_semantic(self, pos: str, features: list[str]) -> str:
-        base = pos.split('+')[0]
-        sem_map = {
-            'NOUN_PROP': 'proper_noun',
-            'NOUN_NUM': 'numeric',
-            'PREP': 'locative',
-            'DET': 'determiner',
-            'JJ': 'modifier',
-            'VB': 'action',
-            'PRP': 'pronoun',
-            'CC': 'conjunction',
-            'RB': 'adverb',
-            'CD': 'quantifier'
-        }
-        # semantic "definite" if definiteness marked in ATB features
-        if any(f.startswith('CASE_DEF') for f in features):
-            return 'definite'
-        return sem_map.get(base, 'unknown')
+        return m.get(pos, CCGType.NOUN)
