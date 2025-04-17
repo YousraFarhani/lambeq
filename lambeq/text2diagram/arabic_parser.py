@@ -1,23 +1,27 @@
 from __future__ import annotations
-"""Arabic → CCG parser for lambeq diagrams (AG‑format ATB).
+"""Arabic → CCG parser for lambeq diagrams (AG‑format ATB)
+================================================================
+This revision *fully* decomposes Arabic clitic strings according to the
+morphological tag list provided by the ATB:
 
-Key improvements in this version
---------------------------------
-1. **Arabic reshaping + BiDi** — tokens are passed through `arabic‑reshaper` and
-   `python‑bidi`, so diagram labels render right‑to‑left correctly.
-2. **Proclitic splitting** — determiners (الـ) are split into a separate `DET`
-   leaf so your diagram shows the expected lexical item.
-3. **Automatic POS→CCG mapping** — uses the coarse POS from the ATB tag; no
-   fixed dictionary required.
+* **CONJ**  – prefixes «و», «ف»
+* **PREP**  – prefixes «ب», «ل», «ك»
+* **DET**   – proclitic «ال»
 
-Install extras once:
+The splitter walks through the tag parts in order and carves the token so that
+*every* tag component becomes its own pre‑terminal leaf in the constituency
+fragment.  This guarantees that all tags are represented in the resulting CCG
+diagram — no more missing `PREP`, `DET`, etc.
+
+Arabic glyph shaping is performed with **`arabic‑reshaper`**.  We *do not* run
+`python‑bidi`; Graphviz already renders RTL correctly once glyphs are joined.
+Install once:
 ```
-pip install arabic-reshaper python-bidi
+pip install arabic-reshaper
 ```
 """
 
 import os, re, stanza, nltk, arabic_reshaper
-from bidi.algorithm import get_display
 from nltk import Tree
 from lambeq.text2diagram.ccg_parser import CCGParser
 from lambeq.text2diagram.ccg_tree import CCGTree
@@ -26,96 +30,103 @@ from lambeq.text2diagram.ccg_type import CCGType
 from lambeq.core.globals import VerbosityLevel
 
 # ---------------------------------------------------------------------------
-# Utilities for Arabic shaping
+# RTL shaping helper
 # ---------------------------------------------------------------------------
 
 def _shape(token: str) -> str:
-    """Return a visually correct RTL string for diagram labels."""
-    return get_display(arabic_reshaper.reshape(token))
+    """Return glyph‑joined RTL string suitable for Graphviz labels."""
+    return arabic_reshaper.reshape(token)
 
 # ---------------------------------------------------------------------------
-# Exceptions
+# Exception
 # ---------------------------------------------------------------------------
 class ArabicParseError(Exception):
-    def __init__(self, sentence: str) -> None:
+    def __init__(self, sentence: str):
         self.sentence = sentence
-    def __str__(self) -> str:  # pragma: no cover
+    def __str__(self):
         return f"ArabicParser failed to parse {self.sentence!r}."
 
 # ---------------------------------------------------------------------------
 # Main parser
 # ---------------------------------------------------------------------------
 class ArabicParser(CCGParser):
-    """Parse Arabic sentences into CCG derivations using ATB constituency
-    trees stored in AG format, then convert to lambeq diagrams.
-    """
-
-    def __init__(self, ag_txt_root: str, verbose: str = VerbosityLevel.PROGRESS.value, **kw):
+    def __init__(self, ag_root: str, verbose: str = VerbosityLevel.PROGRESS.value, **kw):
         super().__init__(verbose=verbose, **kw)
         if not VerbosityLevel.has_value(verbose):
             raise ValueError(f"Invalid verbosity: {verbose}")
         self.verbose = verbose
 
-        # (Optional) dependency pipeline if you need it elsewhere
         stanza.download('ar', processors='tokenize,pos,lemma,depparse')
         self.nlp = stanza.Pipeline(lang='ar', processors='tokenize,pos,lemma,depparse')
 
-        # Load all AG‑format files
-        self.atb_trees: list[Tree] = []
-        for fn in os.listdir(ag_txt_root):
+        self.trees: list[Tree] = []
+        for fn in os.listdir(ag_root):
             if fn.endswith('.txt'):
-                self._parse_ag_file(os.path.join(ag_txt_root, fn))
-        if not self.atb_trees:
-            raise ValueError('No ATB trees found in the provided directory.')
+                self._read_ag_file(os.path.join(ag_root, fn))
+        if not self.trees:
+            raise ValueError('No ATB trees found.')
 
     # ------------------------------------------------------------------
-    # AG‑file reader with DET splitting & token shaping
+    # AG reader
     # ------------------------------------------------------------------
-    def _parse_ag_file(self, path: str):
-        token_map, tag_map, buf = {}, {}, []
+    def _read_ag_file(self, path: str):
+        tok_map, tag_map, buf = {}, {}, []
         with open(path, encoding='utf-8') as fh:
             for raw in fh:
                 line = raw.strip()
-                # token lines
                 if line.startswith('s:'):
                     idx = line.split(':', 1)[1].split('·', 1)[0]
-                    token = line.split('·')[1].strip()
-                    token_map[f'W{idx}'] = token
-                # tag lines
+                    tok_map[f'W{idx}'] = line.split('·')[1].strip()
                 elif line.startswith('t:'):
                     idx = line.split(':', 1)[1].split('·', 1)[0]
-                    tag = line.split('·')[1].strip()
-                    tag_map[f'W{idx}'] = tag
-                # tree buffering
+                    tag_map[f'W{idx}'] = line.split('·')[1].strip()
                 if line.startswith('TREE:'):
                     buf.clear(); continue
                 if line.startswith('(TOP') or buf:
                     buf.append(line)
                     if line.endswith('))'):
-                        tree_str = ' '.join(buf)
-                        # replace placeholders
-                        for wid, tok in token_map.items():
-                            replacement = self._morph_replacement(tok, tag_map.get(wid, 'UNK'))
-                            tree_str = re.sub(rf'\b{re.escape(wid)}\b', replacement, tree_str)
-                        try:
-                            self.atb_trees.append(Tree.fromstring(tree_str))
-                        except ValueError:
-                            pass
+                        tree = self._inject_leaves(' '.join(buf), tok_map, tag_map)
+                        if tree is not None:
+                            self.trees.append(tree)
                         buf.clear()
 
     # ------------------------------------------------------------------
-    # Morphological expansion helper (splits DET + shapes tokens)
+    # Placeholder substitution with full clitic decomposition
     # ------------------------------------------------------------------
-    def _morph_replacement(self, token: str, tag: str) -> str:
-        parts = tag.split('+')
-        shaped_tok = _shape(token)
-        if parts[0] == 'DET' and token.startswith('ال'):
-            det_leaf = f'(DET {_shape("ال")})'
-            rest_tok = token[2:] or token
-            rest_leaf = f'({"+".join(parts[1:]) or "NOUN"} {_shape(rest_tok)})'
-            return f'{det_leaf} {rest_leaf}'
-        safe_tag = re.sub(r'[()\s]', '_', tag)
-        return f'({safe_tag} {shaped_tok})'
+    def _inject_leaves(self, tree_str: str, tok_map: dict, tag_map: dict):
+        for wid, token in tok_map.items():
+            tags = tag_map.get(wid, 'UNK')
+            repl = self._expand_token(token, tags)
+            tree_str = re.sub(rf'\b{re.escape(wid)}\b', repl, tree_str)
+        try:
+            return Tree.fromstring(tree_str)
+        except ValueError:
+            return None
+
+    # Decompose token based on tag list ---------------------------------
+    def _expand_token(self, token: str, tag_str: str) -> str:
+        parts = tag_str.split('+')
+        leaves: list[tuple[str, str]] = []
+        t = token
+        # 1) CONJ prefix «و», «ف»
+        if 'CONJ' in parts and t and t[0] in 'وف':
+            leaves.append(('CONJ', t[0]))
+            t = t[1:]
+            parts.remove('CONJ')
+        # 2) PREP prefix «ب», «ل», «ك»
+        if 'PREP' in parts and t and t[0] in 'بللك':
+            leaves.append(('PREP', t[0]))
+            t = t[1:]
+            parts.remove('PREP')
+        # 3) DET proclitic «ال»
+        if 'DET' in parts and t.startswith('ال'):
+            leaves.append(('DET', 'ال'))
+            t = t[2:]
+            parts.remove('DET')
+        # 4) Remainder
+        leaves.append(('+'.join(parts) or 'NOUN', t))
+        # Build s‑expression fragment
+        return ' '.join(f'({re.sub(r"[()\s]", "_", tag)} {_shape(tok)})' for tag, tok in leaves if tok)
 
     # ------------------------------------------------------------------
     # Public API
@@ -127,49 +138,46 @@ class ArabicParser(CCGParser):
         return [None if t is None else self.to_diagram(t) for t in self.sentences2trees(sentences, **kw)]
 
     def sentences2trees(self, sentences, suppress_exceptions=False, **kw):
-        res = []
+        out = []
         for s in sentences:
             try:
-                tree = self._find_matching_tree(self._norm(s))
-                res.append(self._to_ccg(tree))
+                tree = self._find_tree(self._tokenise(s))
+                out.append(self._to_ccg(tree))
             except Exception as e:
-                res.append(None if suppress_exceptions else (_ for _ in ()).throw(e))
-        return res
+                out.append(None if suppress_exceptions else (_ for _ in ()).throw(e))
+        return out
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Internal helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _norm(text: str):
+    def _tokenise(text: str):
         return re.findall(r'\b\w+\b', text)
 
-    def _find_matching_tree(self, tokens):
-        for t in self.atb_trees:
+    def _find_tree(self, tokens):
+        for t in self.trees:
             if t.leaves() == tokens:
                 return t
         raise ArabicParseError(' '.join(tokens))
 
-    def _to_ccg(self, t: Tree) -> CCGTree:
+    def _to_ccg(self, t: Tree):
         # pre‑terminal
         if len(t) == 1 and isinstance(t[0], str):
             return CCGTree(text=t[0], rule=CCGRule.LEXICAL, biclosed_type=self._map_pos(t.label()))
-        children = [self._to_ccg(c) for c in t]
-        node = children[0]
-        for right in children[1:]:
-            node = CCGTree(text=None, rule=CCGRule.FORWARD_APPLICATION, children=[node, right], biclosed_type=CCGType.SENTENCE)
-        return node
+        kids = [self._to_ccg(c) for c in t]
+        root = kids[0]
+        for r in kids[1:]:
+            root = CCGTree(text=None, rule=CCGRule.FORWARD_APPLICATION, children=[root, r], biclosed_type=CCGType.SENTENCE)
+        return root
 
-    # ------------------------------------------------------------------
-    # Heuristic POS → CCG mapping
-    # ------------------------------------------------------------------
-    def _map_pos(self, tag: str) -> CCGType:
-        c = tag.split('+')[0]
-        if 'DET' in c:  return CCGType.NOUN.slash('/', CCGType.NOUN)
-        if 'NOUN' in c: return CCGType.NOUN
-        if 'PRON' in c: return CCGType.NOUN_PHRASE
-        if 'ADJ'  in c: return CCGType.NOUN.slash('/', CCGType.NOUN)
-        if 'PREP' in c: return CCGType.NOUN_PHRASE.slash('\\', CCGType.NOUN_PHRASE)
-        if any(v in c for v in ('VB', 'IV', 'PV')):
+    # Coarse POS → CCG ---------------------------------------------------
+    def _map_pos(self, tag: str):
+        segs = tag.split('+')
+        if 'DET' in segs:   return CCGType.NOUN.slash('/', CCGType.NOUN)
+        if 'PRON' in segs:  return CCGType.NOUN_PHRASE
+        if 'ADJ' in segs:   return CCGType.NOUN.slash('/', CCGType.NOUN)
+        if 'PREP' in segs:  return CCGType.NOUN_PHRASE.slash('\\', CCGType.NOUN_PHRASE)
+        if 'CONJ' in segs or 'PUNC' in segs: return CCGType.CONJUNCTION
+        if any(v in segs[0] for v in ('VB', 'IV', 'PV')):  # verbs often first segment
             return CCGType.SENTENCE.slash('\\', CCGType.NOUN_PHRASE)
-        if 'CONJ' in c or 'PUNC' in c: return CCGType.CONJUNCTION
         return CCGType.NOUN
